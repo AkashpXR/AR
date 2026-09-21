@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>Garments AR</title>
+<meta name="description" content="Place the garment on the floor at true size using the camera.">
+
+<!-- 8th Wall Engine (world tracking), XRExtras (loading / permissions / errors), Landing Page (unsupported devices).
+     AR engine: Copyright © 2026 Niantic Spatial, Inc. All rights reserved.
+     Licensed under https://github.com/8thwall/engine/blob/main/LICENSE -->
+<script src="https://cdn.jsdelivr.net/npm/@8thwall/engine-binary@1/dist/xr.js" async crossorigin="anonymous" data-preload-chunks="slam"></script>
+<script src="https://cdn.jsdelivr.net/npm/@8thwall/xrextras@1/dist/xrextras.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@8thwall/landing-page@1/dist/landing-page.js" crossorigin="anonymous"></script>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.183.2/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.183.2/examples/jsm/"
+} }
+</script>
+
+<style>
+  :root { --accent: #ff4d6d; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #000; font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: #fff; }
+  #camerafeed { position: fixed; inset: 0; width: 100%; height: 100%; touch-action: none; }
+  #ui { position: fixed; inset: 0; pointer-events: none; display: flex; flex-direction: column; justify-content: space-between; }
+  #top { padding: calc(14px + env(safe-area-inset-top)) 16px 0; display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+  #top a, #top span { pointer-events: auto; background: rgba(0,0,0,.45); color: #fff; text-decoration: none; padding: 8px 12px; border-radius: 999px; font-size: 14px; backdrop-filter: blur(6px); }
+  #bottom { padding: 0 16px calc(16px + env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 10px; align-items: center; }
+  #hint { background: rgba(0,0,0,.55); padding: 10px 16px; border-radius: 12px; font-size: 15px; text-align: center; max-width: 420px; backdrop-filter: blur(6px); }
+  .btn { pointer-events: auto; border: 0; border-radius: 12px; padding: 12px 18px; font-size: 16px; font-weight: 600; color: #fff; background: var(--accent); }
+  .btn.secondary { background: rgba(255,255,255,.18); }
+  #controls { display: none; gap: 10px; }
+  #controls.on { display: flex; }
+  #credit { font-size: 10px; color: rgba(255,255,255,.55); text-align: center; }
+  #credit a { color: inherit; }
+</style>
+</head>
+<body>
+  <canvas id="camerafeed"></canvas>
+  <div id="ui">
+    <div id="top">
+      <a id="back" href="../">‹ Back</a>
+      <span id="title">Garment</span>
+    </div>
+    <div id="bottom">
+      <div id="hint">Loading…</div>
+      <div id="controls">
+        <button class="btn" id="place" type="button">Place here</button>
+        <button class="btn secondary" id="reset" type="button">Reset</button>
+      </div>
+      <div id="credit">AR engine © 2026 Niantic Spatial, Inc. · <a href="https://github.com/8thwall/engine/blob/main/LICENSE" target="_blank" rel="noopener">license</a></div>
+    </div>
+  </div>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

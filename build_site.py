@@ -29,11 +29,14 @@ PAGE = """<!doctype html>
   .bar {{ padding: 16px 20px calc(16px + env(safe-area-inset-bottom)); background: var(--card); box-shadow: 0 -8px 24px rgba(0,0,0,.08); }}
   .bar h1 {{ margin: 0 0 4px; font-size: 20px; font-weight: 600; }}
   .bar p {{ margin: 0 0 14px; color: var(--muted); font-size: 14px; }}
-  .ar {{ display: none; width: 100%; padding: 14px 18px; border: 0; border-radius: 12px; background: var(--accent); color: #fff; font-size: 17px; font-weight: 600; cursor: pointer; }}
+  .ar {{ display: block; width: 100%; padding: 14px 18px; border: 0; border-radius: 12px; background: var(--accent); color: #fff; font-size: 17px; font-weight: 600; cursor: pointer; text-align: center; text-decoration: none; box-sizing: border-box; }}
   .ar:active {{ filter: brightness(.9); }}
+  .ar.alt {{ display: none; margin-top: 8px; background: transparent; color: var(--muted); font-weight: 500; font-size: 14px; padding: 6px; }}
   .noar {{ display: none; margin: 0; padding: 12px 14px; border-radius: 10px; background: rgba(127,127,127,.12); color: var(--muted); font-size: 14px; }}
-  .has-ar .ar {{ display: block; }}
+  .has-ar .ar.alt {{ display: block; }}
+  .no-ar #arlink {{ display: none; }}
   .no-ar .noar {{ display: block; }}
+  @media (pointer: coarse) {{ .no-ar #arlink {{ display: block; }} .no-ar .noar {{ display: none; }} }}
   .progress {{ position: absolute; left: 0; right: 0; top: 0; height: 3px; background: rgba(127,127,127,.2); }}
   .progress .fill {{ height: 100%; width: 0; background: var(--accent); transition: width .2s; }}
   .hint {{ position: absolute; left: 0; right: 0; top: 12px; text-align: center; font-size: 13px; color: var(--muted); pointer-events: none; }}
@@ -57,8 +60,9 @@ PAGE = """<!doctype html>
   <div class="bar">
     <h1>{name}</h1>
     <p>{description}</p>
-    <button class="ar" id="arbtn" type="button">View in your space</button>
-    <p class="noar">AR is not available on this device or browser. On iPhone open this page in Safari; on Android use Chrome. You can still rotate the model above.</p>
+    <a class="ar" id="arlink" href="../ar/?m={id}">View in your space</a>
+    <button class="ar alt" id="arbtn" type="button">Use the phone's built-in AR instead</button>
+    <p class="noar">The camera AR needs a phone. On a computer you can still rotate the model above.</p>
   </div>
 </main>
 <script type="module">
@@ -133,6 +137,11 @@ def main():
     with open(os.path.join(SITE, "index.html"), "w", encoding="utf-8") as f:
         f.write(INDEX.format(brand=html.escape(brand), cards="\n".join(cards)))
     print("wrote index.html")
+    # public manifest read by the shared AR page (docs/ar/) to find a garment by id
+    public = {"brand": brand, "models": [{k: m[k] for k in ("id", "name", "glb", "usdz", "poster") if k in m} for m in data["models"]]}
+    with open(os.path.join(SITE, "models.json"), "w", encoding="utf-8") as f:
+        json.dump(public, f, indent=2)
+    print("wrote models.json")
 
 
 if __name__ == "__main__":
