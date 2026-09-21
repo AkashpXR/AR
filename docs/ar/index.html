@@ -31,8 +31,12 @@
   #hint { background: rgba(0,0,0,.55); padding: 10px 16px; border-radius: 12px; font-size: 15px; text-align: center; max-width: 420px; backdrop-filter: blur(6px); }
   .btn { pointer-events: auto; border: 0; border-radius: 12px; padding: 12px 18px; font-size: 16px; font-weight: 600; color: #fff; background: var(--accent); }
   .btn.secondary { background: rgba(255,255,255,.18); }
-  #controls { display: none; gap: 10px; }
+  #controls { display: none; gap: 10px; align-items: center; }
   #controls.on { display: flex; }
+  #sizer { display: none; align-items: center; gap: 8px; pointer-events: auto; background: rgba(0,0,0,.45); border-radius: 999px; padding: 4px; backdrop-filter: blur(6px); }
+  #sizer.on { display: flex; }
+  #sizer span { min-width: 52px; text-align: center; font-size: 14px; font-variant-numeric: tabular-nums; }
+  .btn.round { width: 44px; height: 44px; padding: 0; border-radius: 50%; font-size: 22px; line-height: 44px; }
   #credit { font-size: 10px; color: rgba(255,255,255,.55); text-align: center; }
   #credit a { color: inherit; }
 </style>
@@ -48,6 +52,11 @@
       <div id="hint">Loading…</div>
       <div id="controls">
         <button class="btn" id="place" type="button">Place here</button>
+        <div id="sizer">
+          <button class="btn secondary round" id="smaller" type="button" aria-label="Smaller">−</button>
+          <span id="scale">100%</span>
+          <button class="btn secondary round" id="bigger" type="button" aria-label="Bigger">+</button>
+        </div>
         <button class="btn secondary" id="reset" type="button">Reset</button>
       </div>
       <div id="credit">AR engine © 2026 Niantic Spatial, Inc. · <a href="https://github.com/8thwall/engine/blob/main/LICENSE" target="_blank" rel="noopener">license</a></div>
