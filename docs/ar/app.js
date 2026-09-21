@@ -18,6 +18,8 @@ const HIT_TYPES = ['DETECTED_SURFACE', 'ESTIMATED_SURFACE', 'FEATURE_POINT']
 const CAMERA_HEIGHT = 1.4
 const SCALE_MIN = 0.5, SCALE_MAX = 2.0, SCALE_STEP = 0.1
 const ROTATE_RAD_PER_PX = 0.012
+const FLOOR_SNAP = 0.15        // hits within this height of the tracked floor are snapped onto it (metres)
+const POSE_SMOOTHING = 0.55    // 0..1 blend of the new camera pose per frame; lower = smoother but laggier
 
 const ui = {
   hint: document.getElementById('hint'),
@@ -31,7 +33,11 @@ const ui = {
   title: document.getElementById('title'),
   back: document.getElementById('back'),
 }
-const setHint = (t) => { ui.hint.textContent = t; ui.hint.style.display = t ? '' : 'none' }
+const setHint = (t, warn = false) => {
+  ui.hint.textContent = t
+  ui.hint.style.display = t ? '' : 'none'
+  ui.hint.classList.toggle('warn', !!warn)
+}
 const SCAN_HINT = 'Move your phone slowly to scan the floor, then tap where the garment should stand.'
 const PLACED_HINT = 'Swipe on the garment to rotate it. Use − / + to change its size.'
 
@@ -59,6 +65,8 @@ const scenePipelineModule = () => {
   let lastHit = null
   let scale = 1.0
   let drag = null           // {startX, startRot} while a swipe on the garment is in progress
+  let smoothPos = null, smoothQuat = null   // low-pass filtered camera pose
+  let trackingBad = false
 
   const loadModel = () => {
     const draco = new DRACOLoader().setDecoderPath(DRACO_PATH)
@@ -149,7 +157,11 @@ const scenePipelineModule = () => {
   const place = (hit) => {
     if (!model || !hit) return
     const {camera} = XR8.Threejs.xrScene()
-    model.position.set(hit.position.x, hit.position.y, hit.position.z)
+    // The engine keeps the tracked floor at world y = 0 and keeps refining that estimate. Anchoring the
+    // model exactly on y = 0 means those refinements never lift or sink it; only a hit clearly above the
+    // floor (a table, a step) keeps its own height.
+    const y = Math.abs(hit.position.y) < FLOOR_SNAP ? 0 : hit.position.y
+    model.position.set(hit.position.x, y, hit.position.z)
     // face the viewer: rotate about Y so the garment's front (+Z) points at the camera
     const dx = camera.position.x - hit.position.x, dz = camera.position.z - hit.position.z
     model.rotation.set(0, Math.atan2(dx, dz), 0)
@@ -244,7 +256,32 @@ const scenePipelineModule = () => {
       ui.controls.classList.add('on')
       setHint(model ? 'Tap where the garment should stand.' : 'Loading the garment…')
     },
+    listeners: [{
+      event: 'reality.trackingstatus',
+      process: ({detail}) => {
+        // NORMAL = tracking well; LIMITED / UNAVAILABLE = the engine is guessing (fast motion, too little texture)
+        const bad = detail && detail.status && detail.status !== 'NORMAL'
+        if (bad === trackingBad) return
+        trackingBad = bad
+        if (!placed) return
+        if (bad) setHint('Tracking is limited. Move the phone slowly and keep the floor in view.', true)
+        else setHint(PLACED_HINT)
+      },
+    }],
     onUpdate: () => {
+      // Smooth the camera pose the tracker wrote this frame: removes frame-to-frame jitter of the placed
+      // garment at the cost of a few frames of lag while the phone moves quickly.
+      if (POSE_SMOOTHING < 1) {
+        const {camera} = XR8.Threejs.xrScene()
+        if (!smoothPos) {
+          smoothPos = camera.position.clone(); smoothQuat = camera.quaternion.clone()
+        } else {
+          smoothPos.lerp(camera.position, POSE_SMOOTHING)
+          smoothQuat.slerp(camera.quaternion, POSE_SMOOTHING)
+          camera.position.copy(smoothPos)
+          camera.quaternion.copy(smoothQuat)
+        }
+      }
       if (placed || !reticle) return
       // keep the reticle on the floor at the screen centre so people see where the garment will land
       const hit = hitAt(0.5, 0.62)
