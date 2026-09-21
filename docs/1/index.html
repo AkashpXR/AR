@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Wrap Skirt · Garments AR</title>
+<meta name="description" content="Silk duchess satin wrap skirt with print panels, shown on the mannequin at true size.">
+<link rel="preload" as="fetch" href="../models/1/model.glb" crossorigin>
+<script type="module" src="https://cdn.jsdelivr.net/npm/@google/model-viewer@4.3.1/dist/model-viewer.min.js"></script>
+<style>
+  :root { --bg: #f4f2ef; --fg: #1d1b19; --muted: #6b665f; --accent: #b3243f; --card: #ffffff; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #141311; --fg: #f1ede7; --muted: #a39d94; --accent: #ff4d6d; --card: #201e1b; } }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { display: flex; flex-direction: column; min-height: 100dvh; }
+  model-viewer { flex: 1; width: 100%; min-height: 60dvh; background: var(--bg); --poster-color: transparent; }
+  .bar { padding: 16px 20px calc(16px + env(safe-area-inset-bottom)); background: var(--card); box-shadow: 0 -8px 24px rgba(0,0,0,.08); }
+  .bar h1 { margin: 0 0 4px; font-size: 20px; font-weight: 600; }
+  .bar p { margin: 0 0 14px; color: var(--muted); font-size: 14px; }
+  .ar { display: none; width: 100%; padding: 14px 18px; border: 0; border-radius: 12px; background: var(--accent); color: #fff; font-size: 17px; font-weight: 600; cursor: pointer; }
+  .ar:active { filter: brightness(.9); }
+  .noar { display: none; margin: 0; padding: 12px 14px; border-radius: 10px; background: rgba(127,127,127,.12); color: var(--muted); font-size: 14px; }
+  .has-ar .ar { display: block; }
+  .no-ar .noar { display: block; }
+  .progress { position: absolute; left: 0; right: 0; top: 0; height: 3px; background: rgba(127,127,127,.2); }
+  .progress .fill { height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+  .hint { position: absolute; left: 0; right: 0; top: 12px; text-align: center; font-size: 13px; color: var(--muted); pointer-events: none; }
+</style>
+</head>
+<body>
+<main>
+  <model-viewer id="mv"
+    src="../models/1/model.glb"
+    ios-src="../models/1/model.usdz"
+    poster="../models/1/poster.webp"
+    alt="Wrap Skirt shown on a mannequin"
+    ar ar-modes="webxr scene-viewer quick-look" ar-placement="floor" ar-scale="fixed" xr-environment
+    camera-controls touch-action="pan-y" auto-rotate rotation-per-second="20deg"
+    shadow-intensity="1" shadow-softness="0.8" environment-image="neutral" exposure="1"
+    loading="eager" reveal="auto" interaction-prompt="none">
+    <div class="progress" slot="progress-bar"><div class="fill" id="fill"></div></div>
+    <div class="hint">Drag to rotate · pinch to zoom</div>
+    <button slot="ar-button" style="display:none"></button>
+  </model-viewer>
+  <div class="bar">
+    <h1>Wrap Skirt</h1>
+    <p>Silk duchess satin wrap skirt with print panels, shown on the mannequin at true size.</p>
+    <button class="ar" id="arbtn" type="button">View in your space</button>
+    <p class="noar">AR is not available on this device or browser. On iPhone open this page in Safari; on Android use Chrome. You can still rotate the model above.</p>
+  </div>
+</main>
+<script type="module">
+  const mv = document.getElementById('mv');
+  const fill = document.getElementById('fill');
+  const btn = document.getElementById('arbtn');
+  mv.addEventListener('progress', e => { fill.style.width = (e.detail.totalProgress * 100) + '%'; });
+  mv.addEventListener('load', () => { fill.parentElement.style.display = 'none'; });
+  btn.addEventListener('click', () => mv.activateAR());
+  const check = () => {
+    const ok = !!mv.canActivateAR;
+    document.body.classList.toggle('has-ar', ok);
+    document.body.classList.toggle('no-ar', !ok);
+  };
+  mv.addEventListener('load', check);
+  customElements.whenDefined('model-viewer').then(() => setTimeout(check, 0));
+</script>
+</body>
+</html>

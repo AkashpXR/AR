@@ -1,0 +1,13 @@
+{
+  "brand": "Garments AR",
+  "models": [
+    {
+      "id": "1",
+      "name": "Wrap Skirt",
+      "description": "Silk duchess satin wrap skirt with print panels, shown on the mannequin at true size.",
+      "glb": "models/1/model.glb",
+      "usdz": "models/1/model.usdz",
+      "poster": "models/1/poster.webp"
+    }
+  ]
+}

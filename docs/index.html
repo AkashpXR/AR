@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Garments AR</title>
+<style>
+  :root { --bg: #f4f2ef; --fg: #1d1b19; --muted: #6b665f; --card: #ffffff; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #141311; --fg: #f1ede7; --muted: #a39d94; --card: #201e1b; } }
+  body { margin: 0; padding: 24px 16px; background: var(--bg); color: var(--fg); font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  h1 { font-size: 22px; margin: 0 0 16px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+  a.card { display: block; text-decoration: none; color: inherit; background: var(--card); border-radius: 12px; overflow: hidden; }
+  a.card img { display: block; width: 100%; aspect-ratio: 1; object-fit: cover; background: #ddd; }
+  a.card span { display: block; padding: 10px 12px; font-weight: 600; }
+  p { color: var(--muted); }
+</style>
+</head>
+<body>
+<h1>Garments AR</h1>
+<p>Scan a garment's QR code, or pick one below.</p>
+<div class="grid">
+  <a class="card" href="1/"><img src="models/1/poster.webp" alt=""><span>Wrap Skirt</span></a>
+</div>
+</body>
+</html>
