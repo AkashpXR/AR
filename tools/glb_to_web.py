@@ -2,16 +2,18 @@
 
 usage: blender -b --python glb_to_web.py -- <in.glb> <out_dir> [cloth_ratio] [skin_ratio]
 """
-import bpy, sys, os, re, json, struct
+import bpy, sys, os, re, json, struct, shutil, subprocess
 import numpy as np
 from mathutils import Vector
 
 argv = sys.argv[sys.argv.index("--") + 1:]
-src, out_dir = argv[0], argv[1]
+src, out_dir = os.path.abspath(argv[0]), os.path.abspath(argv[1])   # absolute: Blender resolves texture paths against its own cwd
 cloth_ratio = float(argv[2]) if len(argv) > 2 else 0.35
 skin_ratio = float(argv[3]) if len(argv) > 3 else 0.5
+model_scale = float(argv[4]) if len(argv) > 4 else 1.0   # uniform scale baked into the geometry (0.9 tuned in Unity)
 os.makedirs(out_dir, exist_ok=True)
 HAIR = {"Material154152", "Material154157", "Material154162"}
+HAIR_CUTOFF = 0.3   # alpha-clip threshold the user settled on in Unity; hair is matte, double-sided cutout
 SKIN = {"Material154167", "Material154171", "Material154175", "Material154179"}
 
 bpy.ops.wm.read_factory_settings(use_empty=True)
@@ -28,6 +30,16 @@ for obj in meshes:
         obj.name = 'Avatar'; obj.data.name = 'Avatar'
     if obj.name == 'Cloth':
         obj.data.name = 'Cloth'
+
+# ---- uniform scale baked into the vertices
+if abs(model_scale - 1.0) > 1e-6:
+    for obj in meshes:
+        me = obj.data
+        co = np.empty(len(me.vertices) * 3, dtype=np.float32)
+        me.vertices.foreach_get("co", co)
+        me.vertices.foreach_set("co", co * model_scale)
+        me.update()
+    print(f"applied model scale x{model_scale}")
 
 # ---- bake KHR_texture_transform (Mapping nodes) into UVs
 transforms, mapping_nodes = {}, {}
@@ -141,8 +153,17 @@ for mat in bpy.data.materials:
             nt.links.new(tex.outputs['Color'], inp)
             print(f"{mat.name}: relinked {tex.image.name} directly (bypassed {srcn.type})")
     if mat.name in HAIR:
-        mat.surface_render_method = 'BLENDED'
-        mat.use_backface_culling = True
+        mat.surface_render_method = 'DITHERED'   # cutout, not blended
+        mat.use_backface_culling = False         # both faces
+        if hasattr(mat, 'blend_method'):         # legacy props the USD exporter still reads
+            mat.blend_method = 'CLIP'
+            mat.alpha_threshold = HAIR_CUTOFF
+        bsdf.inputs['Roughness'].default_value = 1.0
+        bsdf.inputs['Metallic'].default_value = 0.0
+        for spec_name in ('Specular IOR Level', 'Specular'):
+            if spec_name in bsdf.inputs:
+                bsdf.inputs[spec_name].default_value = 0.0
+                break
     a = bsdf.inputs['Alpha']
     print(f"{mat.name}: render={mat.surface_render_method} backface_cull={mat.use_backface_culling} alpha_linked={a.is_linked} alpha={a.default_value:.2f}")
 
@@ -251,11 +272,26 @@ bpy.ops.export_scene.gltf(
     export_normals=True, export_tangents=False)
 print("GLB", os.path.getsize(glb_path))
 
-usdz_path = os.path.join(out_dir, "model.usdz")
+# ---- USD: export a plain .usdc + textures, patch it with pxr (usd_fix.py), then package as .usdz
+usd_dir = os.path.join(out_dir, "_usd")
+shutil.rmtree(usd_dir, ignore_errors=True)
+os.makedirs(usd_dir, exist_ok=True)
+usdc_path = os.path.join(usd_dir, "model.usdc")
 bpy.ops.wm.usd_export(
-    filepath=usdz_path, export_materials=True, export_textures_mode='NEW', generate_preview_surface=True,
+    filepath=usdc_path, export_materials=True, export_textures_mode='NEW', generate_preview_surface=True,
     convert_orientation=True, export_global_forward_selection='NEGATIVE_Z', export_global_up_selection='Y',
     export_animation=False, export_armatures=False, triangulate_meshes=True, export_custom_properties=False)
+usdz_path = os.path.join(out_dir, "model.usdz")
+tools_dir = os.path.dirname(os.path.abspath(__file__))
+try:
+    sys.path.insert(0, tools_dir)
+    import usd_fix
+    for line in usd_fix.fix_and_package(usd_dir, usdz_path, HAIR_CUTOFF, HAIR):
+        print("USD", line)
+except ImportError as e:
+    print("pxr not usable inside Blender (", e, ") -> running usd_fix.py with system python")
+    subprocess.run(["python", os.path.join(tools_dir, "usd_fix.py"), usd_dir, usdz_path, str(HAIR_CUTOFF), *sorted(HAIR)], check=True)
+shutil.rmtree(usd_dir, ignore_errors=True)
 print("USDZ", os.path.getsize(usdz_path))
 
 # ---- poster render
@@ -278,7 +314,7 @@ bg.inputs[0].default_value = (0.8, 0.8, 0.85, 1); bg.inputs[1].default_value = 1
 cam_data = bpy.data.cameras.new("Cam"); cam = bpy.data.objects.new("Cam", cam_data)
 scene.collection.objects.link(cam); scene.camera = cam
 cam_data.lens = 60
-target = Vector((0.0, 0.0, 0.95))
+target = Vector((0.0, 0.0, 0.95 * model_scale))
 side = Vector((-fwd.y, fwd.x, 0.0))
 cam.location = target + fwd * 2.9 + side * 1.0 + Vector((0.0, 0.0, 0.35))
 cam.rotation_euler = (target - cam.location).to_track_quat('-Z', 'Y').to_euler()
@@ -298,9 +334,16 @@ with open(glb_path, "rb") as f:
     rest = f.read()
 for m in js.get("materials", []):
     if m.get("name") in HAIR:
-        m["alphaMode"] = "BLEND"
-        m["doubleSided"] = False
-        m.setdefault("pbrMetallicRoughness", {})["baseColorFactor"] = [1, 1, 1, 1]
+        m["alphaMode"] = "MASK"
+        m["alphaCutoff"] = HAIR_CUTOFF
+        m["doubleSided"] = True
+        pbr = m.setdefault("pbrMetallicRoughness", {})
+        pbr["baseColorFactor"] = [1, 1, 1, 1]
+        pbr["metallicFactor"] = 0.0
+        pbr["roughnessFactor"] = 1.0
+        m.setdefault("extensions", {})["KHR_materials_specular"] = {"specularFactor": 0.0}
+if "KHR_materials_specular" not in js.setdefault("extensionsUsed", []):
+    js["extensionsUsed"].append("KHR_materials_specular")
 jb = json.dumps(js, separators=(",", ":")).encode("utf-8")
 jb += b" " * ((4 - len(jb) % 4) % 4)
 with open(glb_path, "wb") as f:
@@ -317,7 +360,7 @@ for mesh in js["meshes"]:
 print("meshes:", [m["name"] for m in js["meshes"]], "total tris:", tris)
 for m in js["materials"]:
     pbr = m.get("pbrMetallicRoughness", {})
-    print(f"  {m['name']}: alpha={m.get('alphaMode', 'OPAQUE')} ds={m.get('doubleSided', False)} bcf={pbr.get('baseColorFactor')} bcTex={pbr.get('baseColorTexture', {}).get('index')} nm={m.get('normalTexture', {}).get('index')}")
+    print(f"  {m['name']}: alpha={m.get('alphaMode', 'OPAQUE')} cutoff={m.get('alphaCutoff')} ds={m.get('doubleSided', False)} bcf={pbr.get('baseColorFactor')} rough={pbr.get('roughnessFactor')} spec={m.get('extensions', {}).get('KHR_materials_specular')} bcTex={pbr.get('baseColorTexture', {}).get('index')} nm={m.get('normalTexture', {}).get('index')}")
 for i, im in enumerate(js.get("images", [])):
     bv = js["bufferViews"][im["bufferView"]]
     print(f"  image{i} {im.get('mimeType')} {bv['byteLength']} bytes")
