@@ -39,6 +39,9 @@
   #sizer span { min-width: 52px; text-align: center; font-size: 14px; font-variant-numeric: tabular-nums; }
   .btn.round { width: 44px; height: 44px; padding: 0; border-radius: 50%; font-size: 22px; line-height: 44px; }
   #hint.warn { background: rgba(180,40,40,.7); }
+  /* hide the "powered by 8th Wall" badge injected by the MIT-licensed xrextras and landing-page helpers
+     (the engine licence only requires the copyright comment above) */
+  .poweredby-img, img[src*="poweredby"], .landing8-attribution-logo, [aria-label*="powered by" i], [class*="powered-by"], [class*="poweredby"] { display: none !important; }
 </style>
 </head>
 <body>
