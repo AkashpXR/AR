@@ -53,6 +53,10 @@
   const mv = document.getElementById('mv');
   const fill = document.getElementById('fill');
   const btn = document.getElementById('arbtn');
+  // Android test switch: ?ar=scene-viewer prefers Google's native Scene Viewer over in-page WebXR
+  const arPref = new URLSearchParams(location.search).get('ar');
+  if (arPref === 'scene-viewer') mv.setAttribute('ar-modes', 'scene-viewer webxr quick-look');
+  if (arPref === 'webxr') mv.setAttribute('ar-modes', 'webxr quick-look');
   mv.addEventListener('progress', e => { fill.style.width = (e.detail.totalProgress * 100) + '%'; });
   mv.addEventListener('load', () => { fill.parentElement.style.display = 'none'; });
   btn.addEventListener('click', () => mv.activateAR());

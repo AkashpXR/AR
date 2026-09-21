@@ -202,6 +202,14 @@ for obj in meshes:
 # (the glTF exporter copies packed originals byte-for-byte and ignores in-memory scaling)
 tex_dir = os.path.join(out_dir, "_tex")
 os.makedirs(tex_dir, exist_ok=True)
+# images used by the hair materials get a hard alpha (1 above the cutoff, 0 below): AR Quick Look keeps
+# blending pixels that pass opacityThreshold at their own alpha, which made the hair look see-through
+hair_images = set()
+for mat in bpy.data.materials:
+    if mat.name in HAIR:
+        for n in mat.node_tree.nodes:
+            if n.type == 'TEX_IMAGE' and n.image is not None:
+                hair_images.add(n.image.name)
 print("=== TEXTURES ===")
 for img in list(bpy.data.images):
     if img.type != 'IMAGE':
@@ -221,6 +229,9 @@ for img in list(bpy.data.images):
     new.alpha_mode = img.alpha_mode
     px = np.empty(nw * nh * 4, dtype=np.float32)
     img.pixels.foreach_get(px)
+    hard_alpha = img.name in hair_images and img.channels == 4
+    if hard_alpha:
+        px[3::4] = (px[3::4] >= HAIR_CUTOFF).astype(np.float32)
     new.pixels.foreach_set(px)
     new.file_format = fmt
     path = os.path.join(tex_dir, re.sub(r'[^A-Za-z0-9_.-]+', '_', img.name) + ext)
@@ -234,7 +245,7 @@ for img in list(bpy.data.images):
         for n in mat.node_tree.nodes:
             if n.type == 'TEX_IMAGE' and n.image == img:
                 n.image = new
-    print(f"{img.name}: {w}x{h} -> {nw}x{nh} {fmt} {os.path.getsize(path)} bytes colorspace={new.colorspace_settings.name}")
+    print(f"{img.name}: {w}x{h} -> {nw}x{nh} {fmt} {os.path.getsize(path)} bytes colorspace={new.colorspace_settings.name}{' HARD-ALPHA(hair)' if hard_alpha else ''}")
     bpy.data.images.remove(img)
 
 # ---- face direction (eyes vs head) for the poster camera
