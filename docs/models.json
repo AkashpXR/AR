@@ -4,9 +4,12 @@
     {
       "id": "1",
       "name": "Wrap Skirt",
+      "description": "Silk duchess satin wrap skirt with print panels, shown on the mannequin at true size.",
       "glb": "models/1/model.glb",
       "usdz": "models/1/model.usdz",
-      "poster": "models/1/poster.webp"
+      "poster": "models/1/poster.webp",
+      "video": "models/1/intro.mp4",
+      "pattern": "Resources/1/Wrap%20Skirt%20Patterns%20with%20Labeling-1.png"
     }
   ]
 }

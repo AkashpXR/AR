@@ -26,21 +26,39 @@
   #camerafeed { position: fixed; inset: 0; width: 100%; height: 100%; touch-action: none; z-index: 0; }
   /* the engine positions the canvas itself; keep our overlay above it but below XRExtras' loading/error screens (z-index 800+) */
   #ui { position: fixed; inset: 0; z-index: 500; pointer-events: none; display: flex; flex-direction: column; justify-content: space-between; }
-  #top { padding: calc(14px + env(safe-area-inset-top)) 16px 0; display: flex; justify-content: space-between; align-items: center; gap: 12px; }
-  #top a, #top span { pointer-events: auto; background: rgba(0,0,0,.45); color: #fff; text-decoration: none; padding: 8px 12px; border-radius: 999px; font-size: 14px; backdrop-filter: blur(6px); }
+  #top { padding: calc(14px + env(safe-area-inset-top)) 16px 0; display: flex; flex-direction: column; gap: 10px; align-items: center; }
+  #title { pointer-events: auto; background: rgba(0,0,0,.45); color: #fff; padding: 8px 14px; border-radius: 999px; font-size: 14px; font-weight: 600; backdrop-filter: blur(6px); }
+  #media { display: flex; gap: 10px; }
   #bottom { padding: 0 16px calc(16px + env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 10px; align-items: center; }
   #hint { background: rgba(0,0,0,.55); padding: 10px 16px; border-radius: 12px; font-size: 15px; text-align: center; max-width: 420px; backdrop-filter: blur(6px); }
+  #hint.warn { background: rgba(180,40,40,.7); }
   .btn { pointer-events: auto; border: 0; border-radius: 12px; padding: 12px 18px; font-size: 16px; font-weight: 600; color: #fff; background: var(--accent); }
   .btn.secondary { background: rgba(255,255,255,.18); }
+  .btn.pill { border-radius: 999px; padding: 9px 16px; font-size: 14px; background: rgba(0,0,0,.5); backdrop-filter: blur(6px); }
   #controls { display: none; gap: 10px; align-items: center; }
   #controls.on { display: flex; }
   #sizer { display: none; align-items: center; gap: 8px; pointer-events: auto; background: rgba(0,0,0,.45); border-radius: 999px; padding: 4px; backdrop-filter: blur(6px); }
   #sizer.on { display: flex; }
   #sizer span { min-width: 52px; text-align: center; font-size: 14px; font-variant-numeric: tabular-nums; }
   .btn.round { width: 44px; height: 44px; padding: 0; border-radius: 50%; font-size: 22px; line-height: 44px; }
-  #hint.warn { background: rgba(180,40,40,.7); }
-  /* hide the "powered by 8th Wall" badge injected by the MIT-licensed xrextras and landing-page helpers
-     (the engine licence only requires the copyright comment above) */
+  [hidden] { display: none !important; }
+  /* overlays on top of the AR view */
+  .overlay { position: fixed; inset: 0; z-index: 600; background: #000; }
+  .close { position: absolute; top: calc(12px + env(safe-area-inset-top)); right: 12px; width: 44px; height: 44px; border: 0; border-radius: 50%; background: rgba(0,0,0,.6); color: #fff; font-size: 26px; line-height: 44px; z-index: 2; }
+  #vid { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
+  #vseek { position: absolute; left: 0; right: 0; bottom: 0; display: flex; align-items: center; gap: 10px; padding: 28px 14px calc(14px + env(safe-area-inset-bottom)); background: linear-gradient(to top, rgba(0,0,0,.7), transparent); }
+  #vpp { width: 40px; height: 40px; border: 0; border-radius: 50%; background: rgba(255,255,255,.18); color: #fff; font-size: 16px; flex: none; }
+  #vscrub { flex: 1; height: 28px; margin: 0; -webkit-appearance: none; appearance: none; background: transparent; cursor: pointer; }
+  #vscrub::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; background: linear-gradient(to right, var(--accent) 0 var(--p, 0%), rgba(255,255,255,.35) var(--p, 0%) 100%); }
+  #vscrub::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; margin-top: -6px; border-radius: 50%; background: #fff; }
+  #vscrub::-moz-range-track { height: 4px; border-radius: 2px; background: rgba(255,255,255,.35); }
+  #vscrub::-moz-range-progress { height: 4px; border-radius: 2px; background: var(--accent); }
+  #vscrub::-moz-range-thumb { width: 16px; height: 16px; border: 0; border-radius: 50%; background: #fff; }
+  #vtime { font-size: 12px; color: #ddd; font-variant-numeric: tabular-nums; flex: none; min-width: 74px; text-align: right; }
+  #viewer { background: #111; touch-action: none; overflow: hidden; }
+  #viewer img { position: absolute; left: 0; top: 0; transform-origin: 0 0; user-select: none; -webkit-user-drag: none; max-width: none; will-change: transform; }
+  #zoomhint { position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(16px + env(safe-area-inset-bottom)); color: #ccc; font-size: 13px; background: rgba(0,0,0,.5); padding: 6px 12px; border-radius: 999px; pointer-events: none; transition: opacity .4s; }
+  /* hide the "powered by 8th Wall" badge injected by the MIT-licensed xrextras and landing-page helpers */
   .poweredby-img, img[src*="poweredby"], .landing8-attribution-logo, [aria-label*="powered by" i], [class*="powered-by"], [class*="poweredby"] { display: none !important; }
 </style>
 </head>
@@ -48,8 +66,11 @@
   <canvas id="camerafeed"></canvas>
   <div id="ui">
     <div id="top">
-      <a id="back" href="../">‹ Back</a>
       <span id="title">Garment</span>
+      <div id="media">
+        <button class="btn pill" id="videoBtn" type="button">▶ View Video</button>
+        <button class="btn pill" id="patternsBtn" type="button">View Patterns</button>
+      </div>
     </div>
     <div id="bottom">
       <div id="hint">Loading…</div>
@@ -63,6 +84,20 @@
         <button class="btn secondary" id="reset" type="button">Reset</button>
       </div>
     </div>
+  </div>
+  <div id="videoBox" class="overlay" hidden>
+    <button id="vclose" class="close" type="button" aria-label="Close">×</button>
+    <video id="vid" playsinline preload="metadata"></video>
+    <div id="vseek">
+      <button id="vpp" type="button" aria-label="Play or pause">▶</button>
+      <input id="vscrub" type="range" min="0" max="1000" value="0" step="1" aria-label="Seek">
+      <span id="vtime">0:00 / 0:00</span>
+    </div>
+  </div>
+  <div id="viewer" class="overlay" hidden>
+    <button id="pclose" class="close" type="button" aria-label="Close">×</button>
+    <img id="pattern" alt="Sewing patterns" draggable="false">
+    <div id="zoomhint">Pinch or double-tap to zoom · drag to move</div>
   </div>
   <script type="module" src="app.js"></script>
 </body>
