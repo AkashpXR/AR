@@ -43,22 +43,17 @@ AR_PAGE = """<!doctype html>
   html, body { margin: 0; height: 100%; overflow: hidden; background: #000; font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: #fff; }
   #camerafeed { position: fixed; inset: 0; width: 100%; height: 100%; touch-action: none; z-index: 0; }
   /* the engine positions the canvas itself; keep our overlay above it but below XRExtras' loading/error screens (z-index 800+) */
-  #ui { position: fixed; inset: 0; z-index: 500; pointer-events: none; display: flex; flex-direction: column; justify-content: space-between; }
-  #top { padding: calc(14px + env(safe-area-inset-top)) 16px 0; display: flex; flex-direction: column; gap: 10px; align-items: center; }
-  #title { pointer-events: auto; background: rgba(0,0,0,.45); color: #fff; padding: 8px 14px; border-radius: 999px; font-size: 14px; font-weight: 600; backdrop-filter: blur(6px); }
+  #ui { position: fixed; inset: 0; z-index: 500; pointer-events: none; display: flex; flex-direction: column; justify-content: flex-end; }
   #media { display: flex; gap: 10px; }
   #bottom { padding: 0 16px calc(16px + env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 10px; align-items: center; }
-  #hint { background: rgba(0,0,0,.55); padding: 10px 16px; border-radius: 12px; font-size: 15px; text-align: center; max-width: 420px; backdrop-filter: blur(6px); }
+  #hint { background: rgba(0,0,0,.55); padding: 10px 16px; border-radius: 12px; font-size: 15px; text-align: center; max-width: 420px; backdrop-filter: blur(6px); transition: opacity .35s; }
+  #hint.fade { opacity: 0; }
   #hint.warn { background: rgba(180,40,40,.7); }
   .btn { pointer-events: auto; border: 0; border-radius: 12px; padding: 12px 18px; font-size: 16px; font-weight: 600; color: #fff; background: var(--accent); }
   .btn.secondary { background: rgba(255,255,255,.18); }
   .btn.pill { border-radius: 999px; padding: 9px 16px; font-size: 14px; background: rgba(0,0,0,.5); backdrop-filter: blur(6px); }
   #controls { display: none; gap: 10px; align-items: center; }
   #controls.on { display: flex; }
-  #sizer { display: none; align-items: center; gap: 8px; pointer-events: auto; background: rgba(0,0,0,.45); border-radius: 999px; padding: 4px; backdrop-filter: blur(6px); }
-  #sizer.on { display: flex; }
-  #sizer span { min-width: 52px; text-align: center; font-size: 14px; font-variant-numeric: tabular-nums; }
-  .btn.round { width: 44px; height: 44px; padding: 0; border-radius: 50%; font-size: 22px; line-height: 44px; }
   [hidden] { display: none !important; }
   /* overlays on top of the AR view */
   .overlay { position: fixed; inset: 0; z-index: 600; background: #000; }
@@ -83,23 +78,15 @@ AR_PAGE = """<!doctype html>
 <body>
   <canvas id="camerafeed"></canvas>
   <div id="ui">
-    <div id="top">
-      <span id="title">Garment</span>
-      <div id="media">
-        <button class="btn pill" id="videoBtn" type="button">▶ View Video</button>
-        <button class="btn pill" id="patternsBtn" type="button">View Patterns</button>
-      </div>
-    </div>
     <div id="bottom">
       <div id="hint">Loading…</div>
       <div id="controls">
         <button class="btn" id="place" type="button">Place here</button>
-        <div id="sizer">
-          <button class="btn secondary round" id="smaller" type="button" aria-label="Smaller">−</button>
-          <span id="scale">100%</span>
-          <button class="btn secondary round" id="bigger" type="button" aria-label="Bigger">+</button>
-        </div>
         <button class="btn secondary" id="reset" type="button">Reset</button>
+      </div>
+      <div id="media">
+        <button class="btn pill" id="videoBtn" type="button">▶ View Video</button>
+        <button class="btn pill" id="patternsBtn" type="button">View Patterns</button>
       </div>
     </div>
   </div>

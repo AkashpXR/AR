@@ -23,21 +23,29 @@ const ROTATE_RAD_PER_PX = 0.012
 const FLOOR_SNAP = 0.15        // hits within this height of the tracked floor are snapped onto it (metres)
 const POSE_SMOOTHING = 0.55    // 0..1 blend of the new camera pose per frame; lower = smoother but laggier
 
+const HINT_SECONDS = 3           // every prompt hides itself this long after it appears
+
 const $ = (id) => document.getElementById(id)
 const ui = {
   hint: $('hint'), controls: $('controls'), place: $('place'), reset: $('reset'),
-  sizer: $('sizer'), smaller: $('smaller'), bigger: $('bigger'), scale: $('scale'), title: $('title'),
   videoBtn: $('videoBtn'), patternsBtn: $('patternsBtn'),
   videoBox: $('videoBox'), vid: $('vid'), vclose: $('vclose'), vpp: $('vpp'), vscrub: $('vscrub'), vtime: $('vtime'),
   viewer: $('viewer'), pattern: $('pattern'), pclose: $('pclose'), zoomhint: $('zoomhint'),
 }
+let hintText = null, hintTimer = null
 const setHint = (t, warn = false) => {
+  if (t === hintText) return            // same message: leave the timer alone (the tracking loop repeats hints every frame)
+  hintText = t
+  clearTimeout(hintTimer)
   ui.hint.textContent = t
   ui.hint.style.display = t ? '' : 'none'
   ui.hint.classList.toggle('warn', !!warn)
+  ui.hint.classList.remove('fade')
+  if (t) hintTimer = setTimeout(() => { ui.hint.classList.add('fade') }, HINT_SECONDS * 1000)
 }
 const SCAN_HINT = 'Move your phone slowly to scan the floor, then tap where the garment should stand.'
-const PLACED_HINT = 'Swipe on the garment to rotate it. Use − / + to change its size.'
+const PLACED_HINT = 'Swipe on the garment to rotate it. Pinch to change its size.'
+setHint(ui.hint.textContent.trim())   // arm the auto-hide for the initial "Loading…" text too
 
 // ---- which garment?
 let entry = window.GARMENT || null
@@ -50,7 +58,6 @@ if (!entry) {
   setHint('Unknown garment. Scan the QR code again.')
   throw new Error('garment not found')
 }
-ui.title.textContent = entry.name
 document.title = entry.name + ' · AR'
 
 // ---- overlays: video and patterns (independent of the AR pipeline)
@@ -149,6 +156,7 @@ setupOverlays()
 const scenePipelineModule = () => {
   let model = null, hitProxy = null, reticle = null, shadowPlane = null
   let placed = false, loadError = null, lastHit = null, scale = 1.0, drag = null
+  let pinch = null          // {startDist, startScale} while two fingers are on the screen
   let smoothPos = null, smoothQuat = null, trackingBad = false
 
   const loadModel = () => {
@@ -214,12 +222,11 @@ const scenePipelineModule = () => {
 
   const applyScale = () => {
     if (!model) return
+    scale = Math.min(SCALE_MAX, Math.max(SCALE_MIN, scale))
     model.scale.setScalar(scale)
     shadowPlane.scale.setScalar(scale)
-    ui.scale.textContent = Math.round(scale * 100) + '%'
-    ui.smaller.disabled = scale <= SCALE_MIN + 1e-6
-    ui.bigger.disabled = scale >= SCALE_MAX - 1e-6
   }
+  const fingerDist = (e) => Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY)
 
   const place = (hit) => {
     if (!model || !hit) return
@@ -236,15 +243,13 @@ const scenePipelineModule = () => {
     applyScale()
     setHint(PLACED_HINT)
     ui.place.style.display = 'none'
-    ui.sizer.classList.add('on')
   }
 
   const reset = () => {
-    placed = false; drag = null
+    placed = false; drag = null; pinch = null
     if (model) model.visible = false
     shadowPlane.visible = false
     ui.place.style.display = ''
-    ui.sizer.classList.remove('on')
     setHint(SCAN_HINT)
   }
 
@@ -282,31 +287,43 @@ const scenePipelineModule = () => {
       XR8.XrController.updateCameraProjectionMatrix({origin: camera.position, facing: camera.quaternion})
       canvas.addEventListener('touchmove', (e) => e.preventDefault(), {passive: false})
       canvas.addEventListener('touchstart', (e) => {
-        if (e.touches.length !== 1) { drag = null; return }
+        if (e.touches.length === 2) {
+          // two fingers anywhere on the screen: pinch scales the placed garment
+          drag = null
+          pinch = (placed && model) ? {startDist: fingerDist(e), startScale: scale} : null
+          return
+        }
+        if (e.touches.length !== 1) { drag = null; pinch = null; return }
         const t = e.touches[0]
         const nx = t.clientX / window.innerWidth, ny = t.clientY / window.innerHeight
         drag = (placed && touchesModel(nx, ny)) ? {startX: t.clientX, startRot: model.rotation.y, moved: false} : null
       }, {passive: true})
       canvas.addEventListener('touchmove', (e) => {
+        if (pinch && e.touches.length === 2) {
+          scale = pinch.startScale * (fingerDist(e) / pinch.startDist)
+          applyScale()
+          return
+        }
         if (!drag || e.touches.length !== 1) return
         const dxp = e.touches[0].clientX - drag.startX
         if (Math.abs(dxp) > 4) drag.moved = true
         if (drag.moved) model.rotation.y = drag.startRot + dxp * ROTATE_RAD_PER_PX
       }, {passive: true})
       canvas.addEventListener('touchend', (e) => {
+        const wasPinch = !!pinch
+        if (e.touches.length < 2) pinch = null
+        if (e.touches.length > 0) { drag = null; return }   // a finger is still down: no tap, no fresh drag
         const wasDrag = drag && drag.moved
         drag = null
-        if (wasDrag || placed || e.changedTouches.length !== 1) return
+        if (wasPinch || wasDrag || placed || e.changedTouches.length !== 1) return
         const t = e.changedTouches[0]
         const hit = hitAt(t.clientX / window.innerWidth, t.clientY / window.innerHeight) || lastHit
         if (hit) place(hit)
         else setHint('No floor found there yet. Point at the floor and move a little, then tap again.')
       }, {passive: true})
-      canvas.addEventListener('touchcancel', () => { drag = null }, {passive: true})
+      canvas.addEventListener('touchcancel', () => { drag = null; pinch = null }, {passive: true})
       ui.place.addEventListener('click', () => { if (lastHit) place(lastHit) })
       ui.reset.addEventListener('click', reset)
-      ui.smaller.addEventListener('click', () => { scale = Math.max(SCALE_MIN, +(scale - SCALE_STEP).toFixed(2)); applyScale() })
-      ui.bigger.addEventListener('click', () => { scale = Math.min(SCALE_MAX, +(scale + SCALE_STEP).toFixed(2)); applyScale() })
       ui.controls.classList.add('on')
       setHint(model ? 'Tap where the garment should stand.' : 'Loading the garment…')
     },
