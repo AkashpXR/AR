@@ -49,6 +49,7 @@ AR_PAGE = """<!doctype html>
   #hint { background: rgba(0,0,0,.55); padding: 10px 16px; border-radius: 12px; font-size: 15px; text-align: center; max-width: 420px; backdrop-filter: blur(6px); transition: opacity .35s; }
   #hint.fade { opacity: 0; }
   #hint.warn { background: rgba(180,40,40,.7); }
+  button { -webkit-appearance: none; appearance: none; margin: 0; padding: 0; border: 0; font: inherit; color: inherit; background: none; box-sizing: border-box; }
   .btn { pointer-events: auto; border: 0; border-radius: 12px; padding: 12px 18px; font-size: 16px; font-weight: 600; color: #fff; background: var(--accent); }
   .btn.secondary { background: rgba(255,255,255,.18); }
   .btn.pill { border-radius: 999px; padding: 9px 16px; font-size: 14px; background: rgba(0,0,0,.5); backdrop-filter: blur(6px); }
@@ -57,10 +58,10 @@ AR_PAGE = """<!doctype html>
   [hidden] { display: none !important; }
   /* overlays on top of the AR view */
   .overlay { position: fixed; inset: 0; z-index: 600; background: #000; }
-  .close { position: absolute; top: calc(12px + env(safe-area-inset-top)); right: 12px; width: 44px; height: 44px; border: 0; border-radius: 50%; background: rgba(0,0,0,.6); color: #fff; font-size: 26px; line-height: 44px; z-index: 2; }
+  .close { position: absolute; top: calc(12px + env(safe-area-inset-top)); right: 12px; width: 44px; height: 44px; flex: none; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; background: rgba(0,0,0,.6); color: #fff; font-size: 26px; line-height: 1; z-index: 2; }
   #vid { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
   #vseek { position: absolute; left: 0; right: 0; bottom: 0; display: flex; align-items: center; gap: 10px; padding: 28px 14px calc(14px + env(safe-area-inset-bottom)); background: linear-gradient(to top, rgba(0,0,0,.7), transparent); }
-  #vpp { width: 40px; height: 40px; border: 0; border-radius: 50%; background: rgba(255,255,255,.18); color: #fff; font-size: 16px; flex: none; }
+  #vpp { width: 40px; height: 40px; flex: none; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; background: rgba(255,255,255,.18); color: #fff; font-size: 16px; line-height: 1; }
   #vscrub { flex: 1; height: 28px; margin: 0; -webkit-appearance: none; appearance: none; background: transparent; cursor: pointer; }
   #vscrub::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; background: linear-gradient(to right, var(--accent) 0 var(--p, 0%), rgba(255,255,255,.35) var(--p, 0%) 100%); }
   #vscrub::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; margin-top: -6px; border-radius: 50%; background: #fff; }
