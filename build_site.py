@@ -14,6 +14,7 @@ from urllib.parse import quote
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 SITE = os.path.join(ROOT, "docs")
+MODEL_VIEWER = "https://cdn.jsdelivr.net/npm/@google/model-viewer@4.3.1/dist/model-viewer.min.js"
 
 PAGE = """<!doctype html>
 <html lang="en">
@@ -23,15 +24,29 @@ PAGE = """<!doctype html>
 <title>{name} · {brand}</title>
 <meta name="description" content="{description}">
 <link rel="prefetch" href="../ar/">
+<script type="module" src="{mv}"></script>
 <style>
   :root {{ --bg: #0f0e0d; --fg: #f4f2ef; --muted: #a39d94; --accent: #ff4d6d; --card: rgba(20,18,17,.92); }}
   * {{ box-sizing: border-box; }}
   html, body {{ margin: 0; height: 100%; background: #000; color: var(--fg); font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }}
   main {{ position: fixed; inset: 0; background: var(--bg); }}
-  #intro {{ position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }}
-  .pill {{ position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(24px + env(safe-area-inset-bottom)); border: 0; border-radius: 999px; padding: 10px 16px; font-size: 15px; font-weight: 600; color: #fff; background: rgba(0,0,0,.6); backdrop-filter: blur(6px); }}
+  #intro {{ position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; z-index: 2; }}
+  model-viewer {{ position: absolute; inset: 0; width: 100%; height: 100%; background: var(--bg); visibility: hidden; z-index: 1; --poster-color: transparent; }}
+  main.done model-viewer {{ visibility: visible; }}
+  .pill {{ position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(70px + env(safe-area-inset-bottom)); z-index: 4; border: 0; border-radius: 999px; padding: 10px 16px; font-size: 15px; font-weight: 600; color: #fff; background: rgba(0,0,0,.6); backdrop-filter: blur(6px); }}
   #tap {{ inset: 0; transform: none; left: 0; bottom: 0; width: 100%; height: 100%; border-radius: 0; background: rgba(0,0,0,.35); font-size: 20px; }}
-  #after {{ position: absolute; left: 0; right: 0; bottom: 0; padding: 18px 20px calc(18px + env(safe-area-inset-bottom)); background: linear-gradient(to top, var(--card) 70%, transparent); }}
+  /* video seek bar */
+  #seek {{ position: absolute; left: 0; right: 0; bottom: 0; z-index: 3; display: flex; align-items: center; gap: 10px; padding: 28px 14px calc(14px + env(safe-area-inset-bottom)); background: linear-gradient(to top, rgba(0,0,0,.7), transparent); }}
+  #pp {{ width: 40px; height: 40px; border: 0; border-radius: 50%; background: rgba(255,255,255,.18); color: #fff; font-size: 16px; flex: none; }}
+  #scrub {{ flex: 1; height: 28px; margin: 0; -webkit-appearance: none; appearance: none; background: transparent; cursor: pointer; }}
+  #scrub::-webkit-slider-runnable-track {{ height: 4px; border-radius: 2px; background: linear-gradient(to right, var(--accent) 0 var(--p, 0%), rgba(255,255,255,.35) var(--p, 0%) 100%); }}
+  #scrub::-webkit-slider-thumb {{ -webkit-appearance: none; width: 16px; height: 16px; margin-top: -6px; border-radius: 50%; background: #fff; }}
+  #scrub::-moz-range-track {{ height: 4px; border-radius: 2px; background: rgba(255,255,255,.35); }}
+  #scrub::-moz-range-progress {{ height: 4px; border-radius: 2px; background: var(--accent); }}
+  #scrub::-moz-range-thumb {{ width: 16px; height: 16px; border: 0; border-radius: 50%; background: #fff; }}
+  #time {{ font-size: 12px; color: #ddd; font-variant-numeric: tabular-nums; flex: none; min-width: 74px; text-align: right; }}
+  .hint {{ position: absolute; left: 0; right: 0; top: calc(14px + env(safe-area-inset-top)); z-index: 3; text-align: center; font-size: 13px; color: var(--muted); pointer-events: none; }}
+  #after {{ position: absolute; left: 0; right: 0; bottom: 0; z-index: 5; padding: 18px 20px calc(18px + env(safe-area-inset-bottom)); background: linear-gradient(to top, var(--card) 70%, transparent); }}
   #after h1 {{ margin: 0 0 12px; font-size: 20px; font-weight: 600; text-align: center; }}
   .row {{ display: flex; gap: 10px; }}
   .btn {{ flex: 1; display: block; padding: 14px 12px; border: 0; border-radius: 12px; font-size: 16px; font-weight: 600; text-align: center; text-decoration: none; color: #fff; cursor: pointer; }}
@@ -49,7 +64,17 @@ PAGE = """<!doctype html>
 </head>
 <body>
 <main>
+  <model-viewer id="mv" src="../{glb}" poster="../{poster}" alt="{name} shown on a mannequin"
+    camera-controls touch-action="pan-y" auto-rotate rotation-per-second="20deg"
+    shadow-intensity="1" shadow-softness="0.8" environment-image="neutral" exposure="1"
+    loading="eager" reveal="auto" interaction-prompt="none"></model-viewer>
+  <div class="hint" id="mvhint" hidden>Drag to rotate · pinch to zoom</div>
   <video id="intro" src="{video}" poster="../{poster}" playsinline preload="auto"></video>
+  <div id="seek">
+    <button id="pp" type="button" aria-label="Pause">❚❚</button>
+    <input id="scrub" type="range" min="0" max="1000" value="0" step="1" aria-label="Seek">
+    <span id="time">0:00 / 0:00</span>
+  </div>
   <button id="tap" class="pill" type="button" hidden>▶ Tap to play</button>
   <button id="sound" class="pill" type="button" hidden>🔇 Tap for sound</button>
   <div id="after" hidden>
@@ -72,11 +97,46 @@ PAGE = """<!doctype html>
   const tap = document.getElementById('tap');
   const sound = document.getElementById('sound');
   const after = document.getElementById('after');
+  const stage = document.querySelector('main');
+  const seek = document.getElementById('seek');
+  const scrub = document.getElementById('scrub');
+  const pp = document.getElementById('pp');
+  const time = document.getElementById('time');
+  const mvhint = document.getElementById('mvhint');
 
-  const finished = () => {{ after.hidden = false; sound.hidden = true; tap.hidden = true; }};
+  // video finished -> swap to the 3D preview (already downloading behind the video) with the buttons
+  const finished = () => {{
+    after.hidden = false; sound.hidden = true; tap.hidden = true;
+    video.hidden = true; seek.hidden = true; mvhint.hidden = false; stage.classList.add('done');
+  }};
   video.addEventListener('ended', finished);
   video.addEventListener('error', finished);
-  document.getElementById('replay').addEventListener('click', () => {{ after.hidden = true; video.currentTime = 0; video.muted = false; video.play().catch(() => {{}}); }});
+  document.getElementById('replay').addEventListener('click', () => {{
+    after.hidden = true; mvhint.hidden = true; stage.classList.remove('done');
+    video.hidden = false; seek.hidden = false;
+    video.currentTime = 0; video.muted = false; video.play().catch(() => {{ video.muted = true; video.play(); sound.hidden = false; }});
+  }});
+
+  // seek bar + play/pause
+  const fmt = (t) => {{ t = Math.max(0, t || 0); return Math.floor(t / 60) + ':' + String(Math.floor(t % 60)).padStart(2, '0'); }};
+  let scrubbing = false;
+  const paint = () => {{
+    const d = video.duration || 0, t = video.currentTime || 0;
+    if (!scrubbing) scrub.value = d ? Math.round(t / d * 1000) : 0;
+    scrub.style.setProperty('--p', (d ? t / d * 100 : 0) + '%');
+    time.textContent = fmt(t) + ' / ' + fmt(d);
+    pp.textContent = video.paused ? '▶' : '❚❚';
+    pp.setAttribute('aria-label', video.paused ? 'Play' : 'Pause');
+  }};
+  ['timeupdate', 'durationchange', 'loadedmetadata', 'play', 'pause', 'seeked'].forEach(ev => video.addEventListener(ev, paint));
+  scrub.addEventListener('pointerdown', () => {{ scrubbing = true; }});
+  scrub.addEventListener('input', () => {{ if (video.duration) video.currentTime = scrub.value / 1000 * video.duration; paint(); }});
+  const endScrub = () => {{ scrubbing = false; }};
+  scrub.addEventListener('pointerup', endScrub); scrub.addEventListener('pointercancel', endScrub); scrub.addEventListener('change', endScrub);
+  const toggle = () => {{ if (video.paused) video.play().catch(() => {{}}); else video.pause(); }};
+  pp.addEventListener('click', toggle);
+  video.addEventListener('click', () => {{ if (tap.hidden) toggle(); }});
+  paint();
 
   // Autoplay with sound is blocked without a gesture on most phones: fall back to muted autoplay
   // with a "tap for sound" pill, and if even that is refused, to a tap-to-play overlay.
@@ -220,7 +280,7 @@ def main():
         page_dir = os.path.join(SITE, str(m["id"]))
         os.makedirs(page_dir, exist_ok=True)
         ctx = {k: html.escape(str(v)) for k, v in m.items()}
-        ctx.update(brand=html.escape(brand),
+        ctx.update(brand=html.escape(brand), mv=MODEL_VIEWER,
                    video=rel_url(video) if video else "",
                    pattern=rel_url(pattern) if pattern else "")
         with open(os.path.join(page_dir, "index.html"), "w", encoding="utf-8") as f:
