@@ -6,10 +6,63 @@
       "name": "Wrap Skirt",
       "description": "Silk duchess satin wrap skirt with print panels, shown on the mannequin at true size.",
       "glb": "models/1/model.glb",
-      "usdz": "models/1/model.usdz",
       "poster": "models/1/poster.webp",
       "video": "models/1/intro.mp4",
       "pattern": "models/1/patterns.png"
+    },
+    {
+      "id": "2",
+      "name": "Panelled Skirt",
+      "description": "Panelled skirt, shown on the mannequin at true size.",
+      "glb": "models/2/model.glb",
+      "poster": "models/2/poster.webp",
+      "video": "models/2/intro.mp4",
+      "pattern": "models/2/patterns.png"
+    },
+    {
+      "id": "3",
+      "name": "Straight Skirt",
+      "description": "Straight skirt, shown on the mannequin at true size.",
+      "glb": "models/3/model.glb",
+      "poster": "models/3/poster.webp",
+      "video": "models/3/intro.mp4",
+      "pattern": "models/3/patterns.png"
+    },
+    {
+      "id": "4",
+      "name": "A-line Flare Skirt",
+      "description": "A-line flare skirt, shown on the mannequin at true size.",
+      "glb": "models/4/model.glb",
+      "poster": "models/4/poster.webp",
+      "video": "models/4/intro.mp4",
+      "pattern": "models/4/patterns.png"
+    },
+    {
+      "id": "5",
+      "name": "Basic Flare Skirt",
+      "description": "Basic flare skirt, shown on the mannequin at true size.",
+      "glb": "models/5/model.glb",
+      "poster": "models/5/poster.webp",
+      "video": "models/5/intro.mp4",
+      "pattern": "models/5/patterns.png"
+    },
+    {
+      "id": "7",
+      "name": "Godet Skirt",
+      "description": "Godet skirt, shown on the mannequin at true size.",
+      "glb": "models/7/model.glb",
+      "poster": "models/7/poster.webp",
+      "video": "models/7/intro.mp4",
+      "pattern": "models/7/patterns.png"
+    },
+    {
+      "id": "8",
+      "name": "Gore Skirt",
+      "description": "Gore skirt, shown on the mannequin at true size.",
+      "glb": "models/8/model.glb",
+      "poster": "models/8/poster.webp",
+      "video": "",
+      "pattern": "models/8/patterns.png"
     }
   ]
 }

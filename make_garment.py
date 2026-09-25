@@ -58,13 +58,14 @@ def main():
     ap.add_argument("id")
     ap.add_argument("name")
     ap.add_argument("description", nargs="?", default="")
-    ap.add_argument("--cloth", type=float, default=0.35, help="cloth decimate ratio")
-    ap.add_argument("--skin", type=float, default=0.5, help="skin decimate ratio")
+    ap.add_argument("--cloth", type=float, default=0.35, help="cloth decimate ratio (upper bound; the budget may lower it)")
+    ap.add_argument("--skin", type=float, default=0.5, help="mannequin body decimate ratio (upper bound)")
     ap.add_argument("--scale", type=float, default=0.9, help="uniform scale baked into the model")
-    ap.add_argument("--hair", default="", help="override hair material names, comma separated")
-    ap.add_argument("--skin-mats", default="", help="override skin material names, comma separated")
+    ap.add_argument("--budget", type=int, default=250000, help="total triangle budget for the garment")
+    ap.add_argument("--hair", default="", help="force these material names to be alpha hair cards, comma separated")
     ap.add_argument("--skip-model", action="store_true")
     ap.add_argument("--skip-video", action="store_true")
+    ap.add_argument("--usdz", action="store_true", help="also build model.usdz (Apple Quick Look; the site does not use it)")
     a = ap.parse_args()
 
     src_dir = os.path.join(ROOT, "source", a.id)
@@ -81,15 +82,26 @@ def main():
 
     # 1. model
     if not a.skip_model:
-        cmd = [blender, "-b", "--python", os.path.join(TOOLS, "glb_to_web.py"), "--", glb, out_dir, str(a.cloth), str(a.skin), str(a.scale)]
+        # exports with thousands of topstitch meshes would exhaust Blender: strip them from a temp copy first
+        sys.path.insert(0, TOOLS)
+        from glb_prefilter import prefilter
+        filtered_tmp = os.path.join(tempfile.gettempdir(), f"garment_{a.id}_filtered.glb")
+        glb_in, info = prefilter(glb, filtered_tmp)
+        if info["stripped"]:
+            print(f"    WARNING: {info['trims']} topstitch meshes ({info['trim_tris']:,} tris) dropped before import (too heavy to process); stitching will not show in AR")
+        elif info["trims"]:
+            print(f"    topstitch meshes: {info['trims']} ({info['trim_tris']:,} tris) kept")
+        cmd = [blender, "-b", "--python", os.path.join(TOOLS, "glb_to_web.py"), "--", glb_in, out_dir, str(a.cloth), str(a.skin), str(a.scale), f"budget={a.budget}"]
         if a.hair:
             cmd.append("hair=" + a.hair)
-        if a.skin_mats:
-            cmd.append("skin=" + a.skin_mats)
-        run(cmd, log_keep=["avatar:", "-> HAIR", "-> SKIN", "eyes?", "HAIR:", "SKIN:", "WARNING", "-> ", "tris", "HARD-ALPHA", "USD hair", "usdz packaged", "FINAL GLB", "Traceback", "Error"])
-        for f in ("model.glb", "model.usdz", "poster.webp"):
+        if a.usdz:
+            cmd.append("usdz=1")
+        run(cmd, log_keep=["avatar:", "MAT ", "HAIR:", "NOTE:", "WARNING", "PLAN", "tris", "TEX ", "USD hair", "usdz packaged", "USDZ", "images:", "FINAL GLB", "Traceback", "Error"])
+        for f in ("model.glb", "poster.webp") + (("model.usdz",) if a.usdz else ()):
             p = os.path.join(out_dir, f)
             print(f"    {f}: {os.path.getsize(p) / 1e6:.1f} MB" if os.path.isfile(p) else f"    {f}: MISSING")
+        if glb_in != glb and os.path.isfile(glb_in):
+            os.remove(glb_in)
 
     # 2. video
     if video and not a.skip_video:
@@ -129,7 +141,11 @@ def main():
         entry = {"id": a.id}
         data["models"].append(entry)
         data["models"].sort(key=lambda m: (len(str(m["id"])), str(m["id"])))
-    entry.update({"name": a.name, "glb": f"models/{a.id}/model.glb", "usdz": f"models/{a.id}/model.usdz", "poster": f"models/{a.id}/poster.webp"})
+    entry.update({"name": a.name, "glb": f"models/{a.id}/model.glb", "poster": f"models/{a.id}/poster.webp"})
+    if os.path.isfile(os.path.join(out_dir, "model.usdz")):
+        entry["usdz"] = f"models/{a.id}/model.usdz"
+    else:
+        entry.pop("usdz", None)
     if a.description:
         entry["description"] = a.description
     entry.setdefault("description", "")

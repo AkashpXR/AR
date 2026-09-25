@@ -1,10 +1,16 @@
-"""Blender headless: CLO .glb -> web-optimised model.glb (Draco) + model.usdz + poster.webp
+"""Blender headless: CLO .glb -> web-optimised model.glb (Draco) + poster.webp (+ model.usdz with usdz=1)
 
-usage: blender -b --python glb_to_web.py -- <in.glb> <out_dir> [cloth_ratio] [skin_ratio] [scale] [hair=A,B] [skin=C,D]
+usage: blender -b --python glb_to_web.py -- <in.glb> <out_dir> [cloth_ratio] [skin_ratio] [scale] [key=value ...]
 
-Hair and skin materials on the mannequin are detected automatically (CLO gives every export new material
-names): hair = alpha-textured materials in the head region, skin = the large opaque textured materials.
-Override with hair=Name1,Name2 / skin=Name1,Name2 if the printed detection is wrong.
+Every CLO export is different (mannequins from 95k to 2.4M faces, hundreds of topstitch meshes, hair as alpha
+cards or as solid geometry), so the geometry is reduced against a global triangle budget:
+  budget=250000    total triangles for the whole garment (default)
+  body_max=100000  mannequin body (skin, solid hair, shoes) after decimation
+  trims_max=40000  all "BindedTrim" topstitch meshes together (each capped at trim_each=1500)
+  hair=A,B         force these material names to be treated as alpha hair cards (else auto-detected)
+  usdz=1           also build model.usdz
+Hair cards (alpha-textured materials in the head region) are kept intact and exported as a matte,
+double-sided alpha cutout with hard-alpha textures; tiny materials (eyes, lashes) are kept intact.
 """
 import bpy, sys, os, re, json, struct, shutil, subprocess
 import numpy as np
@@ -15,12 +21,18 @@ positional = [a for a in argv if "=" not in a]
 overrides = dict(a.split("=", 1) for a in argv if "=" in a)
 src, out_dir = os.path.abspath(positional[0]), os.path.abspath(positional[1])   # absolute: Blender resolves texture paths against its own cwd
 cloth_ratio = float(positional[2]) if len(positional) > 2 else 0.35
-skin_ratio = float(positional[3]) if len(positional) > 3 else 0.5
+body_ratio = float(positional[3]) if len(positional) > 3 else 0.5
 model_scale = float(positional[4]) if len(positional) > 4 else 1.0   # uniform scale baked into the geometry (0.9 tuned in Unity)
 HAIR_OVERRIDE = {s.strip() for s in overrides.get("hair", "").split(",") if s.strip()}
-SKIN_OVERRIDE = {s.strip() for s in overrides.get("skin", "").split(",") if s.strip()}
+BUDGET = int(overrides.get("budget", 250000))
+BODY_MAX = int(overrides.get("body_max", 100000))
+TRIMS_MAX = int(overrides.get("trims_max", 40000))
+TRIM_EACH = int(overrides.get("trim_each", 1500))
+TINY_FACES = 4000          # avatar materials below this (eyes, lashes, straps) are never decimated
+JUNK_TARGET = 2000         # flat, absurdly dense avatar parts (shoe soles, ground slabs) collapse to this
+MAKE_USDZ = overrides.get("usdz", "0") == "1"
+HAIR_CUTOFF = 0.3          # alpha-clip threshold the user settled on in Unity; hair is matte, double-sided cutout
 os.makedirs(out_dir, exist_ok=True)
-HAIR_CUTOFF = 0.3   # alpha-clip threshold the user settled on in Unity; hair is matte, double-sided cutout
 
 bpy.ops.wm.read_factory_settings(use_empty=True)
 bpy.ops.import_scene.gltf(filepath=src)
@@ -34,21 +46,17 @@ for obj in meshes:
 for e in [o for o in bpy.data.objects if o.type == 'EMPTY']:
     bpy.data.objects.remove(e, do_unlink=True)
 
-
-def z_extent(o):
-    co = np.empty(len(o.data.vertices) * 3, dtype=np.float32)
-    o.data.vertices.foreach_get("co", co)
-    z = co.reshape(-1, 3)[:, 2]
-    return float(z.max() - z.min()) if len(z) else 0.0
-
-
-# the mannequin: named like "avatar" by CLO, otherwise the tallest mesh; everything else is cloth
-avatar = next((o for o in meshes if 'avatar' in o.name.lower()), None) or max(meshes, key=z_extent)
-avatar.name = 'Avatar'; avatar.data.name = 'Avatar'
-cloth_meshes = [o for o in meshes if o is not avatar]
+# the mannequin is the mesh CLO names "avatar"; "BindedTrim_*" are topstitch meshes; the rest is cloth
+avatar = next((o for o in meshes if 'avatar' in o.name.lower()), None)
+if avatar is not None:
+    avatar.name = 'Avatar'; avatar.data.name = 'Avatar'
+trim_meshes = [o for o in meshes if o is not avatar and o.name.startswith('BindedTrim')]
+cloth_meshes = [o for o in meshes if o is not avatar and o not in trim_meshes]
 if len(cloth_meshes) == 1:
     cloth_meshes[0].name = 'Cloth'; cloth_meshes[0].data.name = 'Cloth'
-print("avatar:", avatar.name, "cloth:", [o.name for o in cloth_meshes])
+print("avatar:", avatar.name if avatar else None, "| cloth meshes:", len(cloth_meshes), "| trim meshes:", len(trim_meshes))
+if avatar is None:
+    print("WARNING: no mannequin mesh in this export (garment only)")
 
 # ---- uniform scale baked into the vertices
 if abs(model_scale - 1.0) > 1e-6:
@@ -148,9 +156,9 @@ for m in bpy.data.materials:
     m.name = base_name(m.name)
 
 
-# ---- detect hair and skin materials on the mannequin
+# ---- material helpers
 def principled(mat):
-    return next((n for n in mat.node_tree.nodes if n.type == 'BSDF_PRINCIPLED'), None) if mat.node_tree else None
+    return next((n for n in mat.node_tree.nodes if n.type == 'BSDF_PRINCIPLED'), None) if mat and mat.node_tree else None
 
 
 def base_color_image(mat):
@@ -189,6 +197,23 @@ def image_has_alpha(img):
     return _alpha_cache[img.name]
 
 
+def is_blended(mat):
+    return getattr(mat, 'surface_render_method', '') == 'BLENDED' or getattr(mat, 'blend_method', '') == 'BLEND'
+
+
+def make_opaque(mat):
+    """Solid geometry exported by CLO as 'blend' (hair without alpha, etc.): export it as plain opaque."""
+    bsdf = principled(mat)
+    if bsdf is not None:
+        a = bsdf.inputs['Alpha']
+        for l in list(a.links):
+            mat.node_tree.links.remove(l)
+        a.default_value = 1.0
+    mat.surface_render_method = 'DITHERED'
+    if hasattr(mat, 'blend_method'):
+        mat.blend_method = 'OPAQUE'
+
+
 def slot_stats(obj):
     me = obj.data
     co = np.empty(len(me.vertices) * 3, dtype=np.float32); me.vertices.foreach_get("co", co); co = co.reshape(-1, 3)
@@ -204,47 +229,44 @@ def slot_stats(obj):
         if len(vs) == 0:
             continue
         z = co[vs, 2]
-        stats[mat.name] = dict(faces=int((pmat == si).sum()), zmean=float(z.mean()), zmin=float(z.min()), zmax=float(z.max()),
-                               centroid=co[vs].mean(axis=0))
+        stats[mat.name] = dict(slot=si, faces=int((pmat == si).sum()), zmean=float(z.mean()), zmin=float(z.min()), zmax=float(z.max()),
+                               centroid=co[vs].mean(axis=0), verts=np.unique(vs))
     return stats
 
 
-def is_blended(mat):
-    return getattr(mat, 'surface_render_method', '') == 'BLENDED' or getattr(mat, 'blend_method', '') == 'BLEND'
-
-
-print("=== MATERIAL DETECTION (avatar) ===")
-st = slot_stats(avatar)
-total_faces = sum(s['faces'] for s in st.values()) or 1
-zlo = min(s['zmin'] for s in st.values()); zhi = max(s['zmax'] for s in st.values()); H = max(zhi - zlo, 1e-6)
-detected_hair, detected_skin, eyes_candidates = set(), set(), []
-for mat in avatar.data.materials:
+# ---- classify the mannequin's materials: hair cards / tiny / junk / body
+print("=== MATERIAL CLASSES (avatar) ===")
+st = slot_stats(avatar) if avatar is not None else {}
+zlo = min((s['zmin'] for s in st.values()), default=0.0); zhi = max((s['zmax'] for s in st.values()), default=1.0); H = max(zhi - zlo, 1e-6)
+HAIR, OPAQUE_FORCE, classes, eyes_candidates = set(), set(), {}, []
+for mat in (avatar.data.materials if avatar is not None else []):
     s = st.get(mat.name) if mat else None
     if not s:
         continue
     img = base_color_image(mat)
     blended = is_blended(mat)
     alpha_tex = image_has_alpha(img)
-    frac = s['faces'] / total_faces
     head = (s['zmean'] - zlo) > 0.72 * H
-    tag = '-'
-    if (blended or alpha_tex) and head and frac >= 0.01:
-        detected_hair.add(mat.name); tag = 'HAIR'
-    elif not blended and img is not None and frac >= 0.03:
-        detected_skin.add(mat.name); tag = 'SKIN'
-    elif not blended and img is not None and head:
-        eyes_candidates.append(mat.name); tag = 'eyes?'
-    print(f"  {mat.name}: faces={s['faces']} ({frac:.1%}) z={s['zmin']:.2f}..{s['zmax']:.2f} blended={blended} alphaTex={alpha_tex} -> {tag}")
-HAIR = HAIR_OVERRIDE or detected_hair
-SKIN = SKIN_OVERRIDE or detected_skin
+    flat = (s['zmax'] - s['zmin']) < 0.02 * H
+    if mat.name in HAIR_OVERRIDE or (alpha_tex and head and s['faces'] >= 200):
+        cls = 'hair'; HAIR.add(mat.name)
+    elif s['faces'] < TINY_FACES:
+        cls = 'tiny'
+        if not blended and img is not None and head:
+            eyes_candidates.append(mat.name)
+    elif flat and s['faces'] > 50000:
+        cls = 'junk'
+    else:
+        cls = 'body'
+    if cls != 'hair' and blended and not alpha_tex:
+        make_opaque(mat); OPAQUE_FORCE.add(mat.name)
+    classes[mat.name] = cls
+    print(f"MAT {cls:5s} {mat.name}: faces={s['faces']} z={s['zmin']:.2f}..{s['zmax']:.2f} blended={blended} alphaTex={alpha_tex}{' -> made opaque' if mat.name in OPAQUE_FORCE else ''}")
 print("HAIR:", sorted(HAIR), "(override)" if HAIR_OVERRIDE else "(detected)")
-print("SKIN:", sorted(SKIN), "(override)" if SKIN_OVERRIDE else "(detected)")
-if not HAIR:
-    print("WARNING: no hair materials detected; pass hair=Name1,Name2 if the mannequin has hair")
-if not SKIN:
-    print("WARNING: no skin materials detected; the avatar will not be decimated")
+if avatar is not None and not HAIR:
+    print("NOTE: no alpha hair cards on this mannequin (hair is solid geometry or absent)")
 
-# ---- material fixes: bypass "black factor x texture" mixes, blend/cull flags
+# ---- material fixes: bypass "black factor x texture" mixes, hair flags
 print("=== MATERIAL FIXES ===")
 for mat in bpy.data.materials:
     nt = mat.node_tree
@@ -271,50 +293,91 @@ for mat in bpy.data.materials:
             if spec_name in bsdf.inputs:
                 bsdf.inputs[spec_name].default_value = 0.0
                 break
-    a = bsdf.inputs['Alpha']
-    print(f"{mat.name}: render={mat.surface_render_method} backface_cull={mat.use_backface_culling} alpha_linked={a.is_linked} alpha={a.default_value:.2f}")
 
 
-# ---- decimate: cloth fully, avatar skin only (via vertex group)
+# ---- decimation against the global budget
 def apply_mod(obj, mod):
     bpy.context.view_layer.objects.active = obj
     with bpy.context.temp_override(object=obj, active_object=obj, selected_objects=[obj], selected_editable_objects=[obj]):
         bpy.ops.object.modifier_apply(modifier=mod.name)
 
 
-print("=== DECIMATE ===")
-for obj in meshes:
-    me = obj.data
-    before = len(me.polygons)
-    mod = obj.modifiers.new("dec", 'DECIMATE')
-    mod.decimate_type = 'COLLAPSE'
-    mod.use_collapse_triangulate = True
-    if obj is not avatar:
-        mod.ratio = cloth_ratio
-    else:
-        skin_idx = {i for i, m in enumerate(me.materials) if m and m.name in SKIN}
-        if not skin_idx:
-            obj.modifiers.remove(mod)
-            print(f"{obj.name}: skipped (no skin materials)")
-            continue
-        vg = obj.vertex_groups.new(name="skin")
-        verts = set()
-        for p in me.polygons:
-            if p.material_index in skin_idx:
-                verts.update(p.vertices)
-        vg.add(list(verts), 1.0, 'REPLACE')
-        mod.ratio = skin_ratio
-        mod.vertex_group = "skin"
-        mod.vertex_group_factor = 1.0
+def decimate_whole(obj, ratio):
+    before = len(obj.data.polygons)
+    if ratio >= 0.999 or before < 200:
+        return before, before
+    mod = obj.modifiers.new("dec", 'DECIMATE'); mod.decimate_type = 'COLLAPSE'; mod.use_collapse_triangulate = True
+    mod.ratio = max(ratio, 0.01)
     apply_mod(obj, mod)
-    print(f"{obj.name}: {before} -> {len(me.polygons)} tris")
+    return before, len(obj.data.polygons)
+
+
+def decimate_group(obj, vert_indices, group_faces, ratio, name):
+    """Collapse only the vertex group so that ~(1 - ratio) of its faces disappear. Blender's ratio is
+    relative to the whole mesh, so it is rescaled here; otherwise a small group gets wiped out."""
+    total = len(obj.data.polygons)
+    if ratio >= 0.999 or group_faces < 200:
+        return total, total
+    vg = obj.vertex_groups.new(name=name)
+    vg.add([int(v) for v in vert_indices], 1.0, 'REPLACE')
+    remove = group_faces * (1.0 - ratio)
+    mod = obj.modifiers.new("dec_" + name, 'DECIMATE'); mod.decimate_type = 'COLLAPSE'; mod.use_collapse_triangulate = True
+    mod.ratio = max(1.0 - remove / max(total, 1), 0.01)
+    mod.vertex_group = name; mod.vertex_group_factor = 1.0
+    apply_mod(obj, mod)
+    return total, len(obj.data.polygons)
+
+
+print("=== DECIMATE (budget %d) ===" % BUDGET)
+kept = 0; body_faces = 0; junk = {}
+if avatar is not None:
+    for n, s in st.items():
+        c = classes.get(n)
+        if c in ('hair', 'tiny'):
+            kept += s['faces']
+        elif c == 'junk':
+            junk[n] = s
+        else:
+            body_faces += s['faces']
+body_target = min(body_faces, int(body_faces * body_ratio), BODY_MAX) if body_faces else 0
+trim_faces = {o.name: len(o.data.polygons) for o in trim_meshes}
+trim_targets = {n: min(f, int(f * cloth_ratio), TRIM_EACH) for n, f in trim_faces.items()}
+if sum(trim_targets.values()) > TRIMS_MAX:
+    k = TRIMS_MAX / sum(trim_targets.values())
+    trim_targets = {n: max(int(t * k), 50) for n, t in trim_targets.items()}
+cloth_faces = {o.name: len(o.data.polygons) for o in cloth_meshes}
+cloth_total = sum(cloth_faces.values())
+cloth_budget = max(BUDGET - kept - body_target - sum(trim_targets.values()) - JUNK_TARGET * len(junk), int(cloth_total * 0.05))
+cloth_r = min(cloth_ratio, cloth_budget / max(cloth_total, 1))
+print(f"PLAN kept(hair+tiny)={kept} body {body_faces}->{body_target} trims {sum(trim_faces.values())}->{sum(trim_targets.values())} junk {sum(s['faces'] for s in junk.values())}->{JUNK_TARGET * len(junk)} cloth {cloth_total}->{int(cloth_total * cloth_r)} (ratio {cloth_r:.3f})")
+
+for obj in cloth_meshes:
+    b, a = decimate_whole(obj, cloth_r)
+    print(f"{obj.name}: {b} -> {a} tris")
+for obj in trim_meshes:
+    t = trim_targets[obj.name]
+    b, a = decimate_whole(obj, t / max(trim_faces[obj.name], 1))
+    if b != a:
+        print(f"{obj.name}: {b} -> {a} tris")
+if trim_meshes:
+    print(f"trims total: {sum(trim_faces.values())} -> {sum(len(o.data.polygons) for o in trim_meshes)} tris")
+if avatar is not None:
+    for n, s in junk.items():
+        b, a = decimate_group(avatar, s['verts'], s['faces'], JUNK_TARGET / s['faces'], "junk_" + s['slot'].__str__())
+        print(f"Avatar junk {n}: {b} -> {a} tris (flat slab of {s['faces']} faces)")
+    if body_faces:
+        verts = np.unique(np.concatenate([s['verts'] for n, s in st.items() if classes.get(n) == 'body']))
+        b, a = decimate_group(avatar, verts, body_faces, body_target / body_faces, "body")
+        print(f"Avatar body: {b} -> {a} tris")
+total_now = sum(len(o.data.polygons) for o in meshes)
+print(f"TOTAL after decimation: {total_now} tris")
 
 # ---- downscale textures and re-encode them to real files, so both exporters embed the small versions
 # (the glTF exporter copies packed originals byte-for-byte and ignores in-memory scaling)
 tex_dir = os.path.join(out_dir, "_tex")
 os.makedirs(tex_dir, exist_ok=True)
-# images used by the hair materials get a hard alpha (1 above the cutoff, 0 below): AR Quick Look keeps
-# blending pixels that pass opacityThreshold at their own alpha, which made the hair look see-through
+# images used by the hair materials get a hard alpha (1 above the cutoff, 0 below): AR Quick Look and
+# blended renderers otherwise show the semi-transparent strands as see-through
 hair_images = set()
 for mat in bpy.data.materials:
     if mat.name in HAIR:
@@ -329,18 +392,19 @@ for img in list(bpy.data.images):
     if w == 0 or h == 0:
         print(f"{img.name}: no pixel data, skipped")
         continue
+    has_alpha = image_has_alpha(img)
     t = 2048 if max(w, h) >= 3000 else (1024 if max(w, h) > 1024 else None)
     if t:
         img.scale(int(w * t / max(w, h)), int(h * t / max(w, h)))
     nw, nh = img.size
-    fmt = 'PNG' if img.file_format == 'PNG' else 'JPEG'
+    fmt = 'PNG' if (img.file_format == 'PNG' and has_alpha) else 'JPEG'   # opaque PNGs become JPEG: same look, far smaller
     ext = '.png' if fmt == 'PNG' else '.jpg'
-    new = bpy.data.images.new(img.name + "_web", nw, nh, alpha=(img.channels == 4))
+    new = bpy.data.images.new(img.name + "_web", nw, nh, alpha=(fmt == 'PNG'))
     new.colorspace_settings.name = img.colorspace_settings.name
     new.alpha_mode = img.alpha_mode
     px = np.empty(nw * nh * 4, dtype=np.float32)
     img.pixels.foreach_get(px)
-    hard_alpha = img.name in hair_images and img.channels == 4
+    hard_alpha = img.name in hair_images and fmt == 'PNG'
     if hard_alpha:
         px[3::4] = (px[3::4] >= HAIR_CUTOFF).astype(np.float32)
     new.pixels.foreach_set(px)
@@ -356,14 +420,14 @@ for img in list(bpy.data.images):
         for n in mat.node_tree.nodes:
             if n.type == 'TEX_IMAGE' and n.image == img:
                 n.image = new
-    print(f"{img.name}: {w}x{h} -> {nw}x{nh} {fmt} {os.path.getsize(path)} bytes colorspace={new.colorspace_settings.name}{' HARD-ALPHA(hair)' if hard_alpha else ''}")
+    print(f"TEX {img.name}: {w}x{h} -> {nw}x{nh} {fmt} {os.path.getsize(path)} bytes{' HARD-ALPHA(hair)' if hard_alpha else ''}")
     bpy.data.images.remove(img)
 
 # ---- face direction for the poster camera: from the head's skin to the eyes if we can find them, else CLO's default (-Y)
 fwd = Vector((0.0, -1.0, 0.0))
-head_skins = [n for n in SKIN if n in st and (st[n]['zmean'] - zlo) > 0.72 * H]
-if head_skins and eyes_candidates:
-    head_c = st[max(head_skins, key=lambda n: st[n]['faces'])]['centroid']
+head_bodies = [n for n, s in st.items() if classes.get(n) == 'body' and (s['zmean'] - zlo) > 0.72 * H]
+if avatar is not None and head_bodies and eyes_candidates:
+    head_c = st[max(head_bodies, key=lambda n: st[n]['faces'])]['centroid']
     eyes_c = st[min(eyes_candidates, key=lambda n: st[n]['faces'])]['centroid']
     v = Vector((float(eyes_c[0] - head_c[0]), float(eyes_c[1] - head_c[1]), 0.0))
     if v.length > 0.01:
@@ -381,33 +445,35 @@ bpy.ops.export_scene.gltf(
     export_normals=True, export_tangents=False)
 print("GLB", os.path.getsize(glb_path))
 
-# ---- USD: export a plain .usdc + textures, patch it with pxr (usd_fix.py), then package as .usdz
-usd_dir = os.path.join(out_dir, "_usd")
-shutil.rmtree(usd_dir, ignore_errors=True)
-os.makedirs(usd_dir, exist_ok=True)
-usdc_path = os.path.join(usd_dir, "model.usdc")
-bpy.ops.wm.usd_export(
-    filepath=usdc_path, export_materials=True, export_textures_mode='NEW', generate_preview_surface=True,
-    convert_orientation=True, export_global_forward_selection='NEGATIVE_Z', export_global_up_selection='Y',
-    export_animation=False, export_armatures=False, triangulate_meshes=True, export_custom_properties=False)
-usdz_path = os.path.join(out_dir, "model.usdz")
-tools_dir = os.path.dirname(os.path.abspath(__file__))
-try:
-    sys.path.insert(0, tools_dir)
-    import usd_fix
-    for line in usd_fix.fix_and_package(usd_dir, usdz_path, HAIR_CUTOFF, HAIR):
-        print("USD", line)
-except ImportError as e:
-    print("pxr not usable inside Blender (", e, ") -> running usd_fix.py with system python")
-    subprocess.run(["python", os.path.join(tools_dir, "usd_fix.py"), usd_dir, usdz_path, str(HAIR_CUTOFF), *sorted(HAIR)], check=True)
-shutil.rmtree(usd_dir, ignore_errors=True)
-print("USDZ", os.path.getsize(usdz_path))
+# ---- USD (optional, usdz=1): export a plain .usdc + textures, patch it with pxr (usd_fix.py), package as .usdz.
+if MAKE_USDZ:
+    usd_dir = os.path.join(out_dir, "_usd")
+    shutil.rmtree(usd_dir, ignore_errors=True)
+    os.makedirs(usd_dir, exist_ok=True)
+    usdc_path = os.path.join(usd_dir, "model.usdc")
+    bpy.ops.wm.usd_export(
+        filepath=usdc_path, export_materials=True, export_textures_mode='NEW', generate_preview_surface=True,
+        convert_orientation=True, export_global_forward_selection='NEGATIVE_Z', export_global_up_selection='Y',
+        export_animation=False, export_armatures=False, triangulate_meshes=True, export_custom_properties=False)
+    usdz_path = os.path.join(out_dir, "model.usdz")
+    tools_dir = os.path.dirname(os.path.abspath(__file__))
+    try:
+        sys.path.insert(0, tools_dir)
+        import usd_fix
+        for line in usd_fix.fix_and_package(usd_dir, usdz_path, HAIR_CUTOFF, HAIR):
+            print("USD", line)
+    except ImportError as e:
+        print("pxr not usable inside Blender (", e, ") -> running usd_fix.py with system python")
+        subprocess.run(["python", os.path.join(tools_dir, "usd_fix.py"), usd_dir, usdz_path, str(HAIR_CUTOFF), *sorted(HAIR)], check=True)
+    shutil.rmtree(usd_dir, ignore_errors=True)
+    print("USDZ", os.path.getsize(usdz_path))
+else:
+    print("USDZ skipped (pass usdz=1 to generate)")
 
 # ---- poster render
 scene = bpy.context.scene
 engines = [i.identifier for i in scene.render.bl_rna.properties['engine'].enum_items]
 scene.render.engine = next((e for e in engines if 'EEVEE' in e), engines[0])
-print("render engine:", scene.render.engine)
 scene.render.resolution_x = scene.render.resolution_y = 1024
 scene.render.film_transparent = True
 scene.render.image_settings.file_format = 'WEBP'
@@ -436,7 +502,7 @@ bpy.ops.render.render(write_still=True)
 print("POSTER", os.path.getsize(poster) if os.path.exists(poster) else "missing")
 shutil.rmtree(tex_dir, ignore_errors=True)
 
-# ---- post-pass on the GLB json: enforce hair flags, report
+# ---- post-pass on the GLB json: enforce hair and opaque flags, report
 with open(glb_path, "rb") as f:
     magic, ver, length = struct.unpack("<III", f.read(12))
     clen, ctype = struct.unpack("<II", f.read(8))
@@ -452,6 +518,9 @@ for m in js.get("materials", []):
         pbr["metallicFactor"] = 0.0
         pbr["roughnessFactor"] = 1.0
         m.setdefault("extensions", {})["KHR_materials_specular"] = {"specularFactor": 0.0}
+    elif m.get("name") in OPAQUE_FORCE:
+        m["alphaMode"] = "OPAQUE"
+        m.pop("alphaCutoff", None)
 if "KHR_materials_specular" not in js.setdefault("extensionsUsed", []):
     js["extensionsUsed"].append("KHR_materials_specular")
 jb = json.dumps(js, separators=(",", ":")).encode("utf-8")
@@ -467,11 +536,12 @@ tris = 0
 for mesh in js["meshes"]:
     for pr in mesh["primitives"]:
         tris += js["accessors"][pr["indices"]]["count"] // 3
-print("meshes:", [m["name"] for m in js["meshes"]], "total tris:", tris)
+print(f"meshes: {len(js['meshes'])} total tris: {tris}")
 for m in js["materials"]:
     pbr = m.get("pbrMetallicRoughness", {})
-    print(f"  {m['name']}: alpha={m.get('alphaMode', 'OPAQUE')} cutoff={m.get('alphaCutoff')} ds={m.get('doubleSided', False)} bcf={pbr.get('baseColorFactor')} rough={pbr.get('roughnessFactor')} spec={m.get('extensions', {}).get('KHR_materials_specular')} bcTex={pbr.get('baseColorTexture', {}).get('index')} nm={m.get('normalTexture', {}).get('index')}")
+    print(f"  {m['name']}: alpha={m.get('alphaMode', 'OPAQUE')} cutoff={m.get('alphaCutoff')} ds={m.get('doubleSided', False)} bcTex={pbr.get('baseColorTexture', {}).get('index')} nm={m.get('normalTexture', {}).get('index')}")
+img_bytes = 0
 for i, im in enumerate(js.get("images", [])):
-    bv = js["bufferViews"][im["bufferView"]]
-    print(f"  image{i} {im.get('mimeType')} {bv['byteLength']} bytes")
+    bv = js["bufferViews"][im["bufferView"]]; img_bytes += bv['byteLength']
+print(f"images: {len(js.get('images', []))} ({img_bytes / 1e6:.1f} MB)")
 print("FINAL GLB", os.path.getsize(glb_path))

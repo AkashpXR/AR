@@ -7,8 +7,49 @@
       "name": "Wrap Skirt",
       "description": "Silk duchess satin wrap skirt with print panels, shown on the mannequin at true size.",
       "glb": "models/1/model.glb",
-      "usdz": "models/1/model.usdz",
       "poster": "models/1/poster.webp"
+    },
+    {
+      "id": "2",
+      "name": "Panelled Skirt",
+      "glb": "models/2/model.glb",
+      "poster": "models/2/poster.webp",
+      "description": "Panelled skirt, shown on the mannequin at true size."
+    },
+    {
+      "id": "3",
+      "name": "Straight Skirt",
+      "glb": "models/3/model.glb",
+      "poster": "models/3/poster.webp",
+      "description": "Straight skirt, shown on the mannequin at true size."
+    },
+    {
+      "id": "4",
+      "name": "A-line Flare Skirt",
+      "glb": "models/4/model.glb",
+      "poster": "models/4/poster.webp",
+      "description": "A-line flare skirt, shown on the mannequin at true size."
+    },
+    {
+      "id": "5",
+      "name": "Basic Flare Skirt",
+      "glb": "models/5/model.glb",
+      "poster": "models/5/poster.webp",
+      "description": "Basic flare skirt, shown on the mannequin at true size."
+    },
+    {
+      "id": "7",
+      "name": "Godet Skirt",
+      "glb": "models/7/model.glb",
+      "poster": "models/7/poster.webp",
+      "description": "Godet skirt, shown on the mannequin at true size."
+    },
+    {
+      "id": "8",
+      "name": "Gore Skirt",
+      "glb": "models/8/model.glb",
+      "poster": "models/8/poster.webp",
+      "description": "Gore skirt, shown on the mannequin at true size."
     }
   ]
 }

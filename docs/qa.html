@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Garments AR · QA viewer</title>
+<script type="module" src="https://cdn.jsdelivr.net/npm/@google/model-viewer@4.3.1/dist/model-viewer.min.js"></script>
+<style>
+  body { margin: 0; background: #1a1917; color: #eee; font: 14px system-ui, sans-serif; }
+  #bar { display: flex; gap: 8px; flex-wrap: wrap; padding: 10px; }
+  #bar a { color: #ccc; text-decoration: none; padding: 6px 10px; border-radius: 8px; background: #2a2825; }
+  #bar a.on { background: #ff4d6d; color: #fff; }
+  model-viewer { width: 100vw; height: calc(100vh - 60px); background: #2a2825; }
+</style></head>
+<body>
+<div id="bar"></div>
+<model-viewer id="mv" camera-controls auto-rotate rotation-per-second="20deg" shadow-intensity="1" environment-image="neutral" exposure="1" interaction-prompt="none"></model-viewer>
+<script type="module">
+  const q = new URLSearchParams(location.search); const id = q.get('m') || '1';
+  const data = await fetch('models.json', {cache: 'no-cache'}).then(r => r.json());
+  const bar = document.getElementById('bar');
+  for (const m of data.models) { const a = document.createElement('a'); a.href = '?m=' + m.id; a.textContent = m.id + ' ' + m.name; if (m.id === id) a.className = 'on'; bar.appendChild(a); }
+  const mv = document.getElementById('mv'); const entry = data.models.find(m => m.id === id);
+  if (entry) { mv.src = entry.glb; document.title = entry.name + ' · QA'; }
+</script>
+</body></html>
