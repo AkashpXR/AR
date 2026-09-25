@@ -274,13 +274,16 @@ for mat in bpy.data.materials:
     if bsdf is None:
         continue
     inp = bsdf.inputs['Base Color']
-    if inp.is_linked and inp.links[0].from_node.type != 'TEX_IMAGE':
+    # CLO tints a neutral weave texture with the material's base-colour factor (glTF multiplies them); Blender
+    # imports that as a multiply node and the exporter round-trips it, so it must stay. Only the hair cards
+    # bypass it: their black factor would turn the brown strand textures black (the user chose the brown look).
+    if mat.name in HAIR and inp.is_linked and inp.links[0].from_node.type != 'TEX_IMAGE':
         srcn = inp.links[0].from_node
         tex_img = base_color_image(mat)
         tex = next((n for n in nt.nodes if n.type == 'TEX_IMAGE' and n.image == tex_img), None) if tex_img else None
         if tex is not None:
             nt.links.new(tex.outputs['Color'], inp)
-            print(f"{mat.name}: relinked {tex.image.name} directly (bypassed {srcn.type})")
+            print(f"{mat.name}: hair card, texture relinked directly (bypassed {srcn.type} tint)")
     if mat.name in HAIR:
         mat.surface_render_method = 'DITHERED'   # cutout, not blended
         mat.use_backface_culling = False         # both faces
