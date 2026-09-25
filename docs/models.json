@@ -70,7 +70,7 @@
       "description": "Gore skirt, shown on the mannequin at true size.",
       "glb": "models/8/model.glb",
       "poster": "models/8/poster.webp",
-      "video": "",
+      "video": "models/8/intro.mp4",
       "pattern": "models/8/patterns.png"
     },
     {
@@ -94,7 +94,7 @@
     {
       "id": "11",
       "name": "Three Fourth Circle Skirt",
-      "description": "Three-fourth circle skirt, shown at true size.",
+      "description": "Three-fourth circle skirt, shown on the mannequin at true size.",
       "glb": "models/11/model.glb",
       "poster": "models/11/poster.webp",
       "video": "models/11/intro.mp4",
