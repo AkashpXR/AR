@@ -1,28 +1,10 @@
-"""Generate the static web AR site from models.json.
-
-usage: python build_site.py
-Writes docs/index.html, docs/<id>/index.html (the AR page for that garment, media baked in),
-docs/ar/index.html (the same page driven by ?m=<id> and docs/models.json) and docs/models.json.
-docs/ is the GitHub Pages root. All links are relative, so the site works from any host or sub-path.
-
-Media is picked up automatically from docs/Resources/<id>/ (first .mp4 and first .png/.jpg) unless
-models.json names "video" / "pattern". A web-optimised docs/models/<id>/intro.mp4
-(tools/encode_video.py) is preferred over the raw upload.
-"""
-import json, os, html, glob
-from urllib.parse import quote
-
-ROOT = os.path.dirname(os.path.abspath(__file__))
-SITE = os.path.join(ROOT, "docs")
-
-# The AR page. Placeholders are %%NAME%% so CSS/JS braces need no escaping.
-AR_PAGE = """<!doctype html>
+<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
-<title>%%TITLE%%</title>
-<meta name="description" content="%%DESCRIPTION%%">
+<title>Gore Skirt · Garments AR</title>
+<meta name="description" content="Gore skirt, shown on the mannequin at true size.">
 
 <!-- 8th Wall Engine (world tracking), XRExtras (loading / permissions / errors), Landing Page (unsupported devices).
      AR engine: Copyright © 2026 Niantic Spatial, Inc. All rights reserved.
@@ -37,7 +19,7 @@ AR_PAGE = """<!doctype html>
   "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.183.2/examples/jsm/"
 } }
 </script>
-%%GARMENT%%
+<script>window.GARMENT = {"id": "8", "name": "Gore Skirt", "description": "Gore skirt, shown on the mannequin at true size.", "glb": "models/8/model.glb", "poster": "models/8/poster.webp", "video": "", "pattern": "models/8/patterns.png"}</script>
 <style>
   :root { --accent: #ff4d6d; }
   html, body { margin: 0; height: 100%; overflow: hidden; background: #000; font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: #fff; }
@@ -105,119 +87,6 @@ AR_PAGE = """<!doctype html>
     <img id="pattern" alt="Sewing patterns" draggable="false">
     <div id="zoomhint">Pinch or double-tap to zoom · drag to move</div>
   </div>
-  <script type="module" src="%%APP%%"></script>
+  <script type="module" src="../ar/app.js"></script>
 </body>
 </html>
-"""
-
-INDEX = """<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{brand}</title>
-<style>
-  :root {{ --bg: #f4f2ef; --fg: #1d1b19; --muted: #6b665f; --card: #ffffff; }}
-  @media (prefers-color-scheme: dark) {{ :root {{ --bg: #141311; --fg: #f1ede7; --muted: #a39d94; --card: #201e1b; }} }}
-  body {{ margin: 0; padding: 24px 16px; background: var(--bg); color: var(--fg); font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }}
-  h1 {{ font-size: 22px; margin: 0 0 16px; }}
-  .grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }}
-  a.card {{ display: block; text-decoration: none; color: inherit; background: var(--card); border-radius: 12px; overflow: hidden; }}
-  a.card img {{ display: block; width: 100%; aspect-ratio: 1; object-fit: cover; background: #ddd; }}
-  a.card span {{ display: block; padding: 10px 12px; font-weight: 600; }}
-  p {{ color: var(--muted); }}
-</style>
-</head>
-<body>
-<h1>{brand}</h1>
-<p>Scan a garment's QR code, or pick one below.</p>
-<div class="grid">
-{cards}
-</div>
-</body>
-</html>
-"""
-
-
-def url_path(site_relative_path):
-    """docs-relative filesystem path -> percent-encoded URL path (still docs-relative, no leading ../)."""
-    return quote(site_relative_path.replace(os.sep, "/"))
-
-
-def discover_media(m):
-    """Return (video, pattern) as docs-relative paths, honouring models.json overrides.
-
-    Preferred: docs/models/<id>/intro.mp4 and docs/models/<id>/patterns.* (written by make_garment.py).
-    Fallback: the first .mp4 / image in docs/Resources/<id>/ (older layout)."""
-    model_dir = os.path.join(SITE, "models", str(m["id"]))
-    res_dir = os.path.join(SITE, "Resources", str(m["id"]))
-    video = m.get("video")
-    pattern = m.get("pattern")
-    if not video and os.path.isfile(os.path.join(model_dir, "intro.mp4")):
-        video = os.path.join("models", str(m["id"]), "intro.mp4")
-    if not pattern:
-        found = sorted(f for ext in ("patterns.png", "patterns.jpg", "patterns.webp") for f in glob.glob(os.path.join(model_dir, ext)))
-        if found:
-            pattern = os.path.relpath(found[0], SITE)
-    if not video:
-        found = sorted(glob.glob(os.path.join(res_dir, "*.mp4")) + glob.glob(os.path.join(res_dir, "*.MP4")))
-        if found:
-            video = os.path.relpath(found[0], SITE)
-    if not pattern:
-        found = sorted(f for ext in ("*.png", "*.jpg", "*.jpeg", "*.webp") for f in glob.glob(os.path.join(res_dir, ext)))
-        if found:
-            pattern = os.path.relpath(found[0], SITE)
-    return video, pattern
-
-
-def render_ar_page(garment, brand, app_src):
-    title = html.escape((garment["name"] + " · " + brand) if garment else brand)
-    desc = html.escape(garment.get("description", "Place the garment on the floor at true size using the camera.") if garment else "Place the garment on the floor at true size using the camera.")
-    baked = ""
-    if garment:
-        baked = "<script>window.GARMENT = " + json.dumps(garment).replace("</", "<\\/") + "</script>"
-    return (AR_PAGE.replace("%%TITLE%%", title).replace("%%DESCRIPTION%%", desc)
-            .replace("%%GARMENT%%", baked).replace("%%APP%%", app_src))
-
-
-def main():
-    with open(os.path.join(ROOT, "models.json"), encoding="utf-8") as f:
-        data = json.load(f)
-    brand = data["brand"]
-    cards, public = [], []
-    for m in data["models"]:
-        for key in ("glb", "poster"):
-            if not os.path.isfile(os.path.join(SITE, m[key])):
-                print(f"WARNING: {m['id']} missing {m[key]}")
-        video, pattern = discover_media(m)
-        if not video:
-            print(f"NOTE: {m['id']} has no intro video (source/{m['id']}/*.mp4); the View Video button is hidden")
-        if not pattern:
-            print(f"NOTE: {m['id']} has no pattern image (source/{m['id']}/*.png); the View Patterns button is hidden")
-        garment = {
-            "id": str(m["id"]), "name": m["name"], "description": m.get("description", ""),
-            "glb": url_path(m["glb"]), "poster": url_path(m["poster"]),
-            **({"usdz": url_path(m["usdz"])} if m.get("usdz") else {}),
-            "video": url_path(video) if video else "", "pattern": url_path(pattern) if pattern else "",
-        }
-        public.append(garment)
-        page_dir = os.path.join(SITE, garment["id"])
-        os.makedirs(page_dir, exist_ok=True)
-        with open(os.path.join(page_dir, "index.html"), "w", encoding="utf-8") as f:
-            f.write(render_ar_page(garment, brand, "../ar/app.js"))
-        cards.append(f'  <a class="card" href="{garment["id"]}/"><img src="{garment["poster"]}" alt=""><span>{html.escape(garment["name"])}</span></a>')
-        print(f"wrote {garment['id']}/index.html  ({garment['name']})  video={video}  pattern={pattern}")
-    with open(os.path.join(SITE, "index.html"), "w", encoding="utf-8") as f:
-        f.write(INDEX.format(brand=html.escape(brand), cards="\n".join(cards)))
-    print("wrote index.html")
-    os.makedirs(os.path.join(SITE, "ar"), exist_ok=True)
-    with open(os.path.join(SITE, "ar", "index.html"), "w", encoding="utf-8") as f:
-        f.write(render_ar_page(None, brand, "app.js"))
-    print("wrote ar/index.html (shared page, ?m=<id>)")
-    with open(os.path.join(SITE, "models.json"), "w", encoding="utf-8") as f:
-        json.dump({"brand": brand, "models": public}, f, indent=2)
-    print("wrote models.json")
-
-
-if __name__ == "__main__":
-    main()

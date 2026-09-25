@@ -38,6 +38,13 @@
       "description": "Basic flare skirt, shown on the mannequin at true size."
     },
     {
+      "id": "6",
+      "name": "Added Flare Skirt",
+      "glb": "models/6/model.glb",
+      "poster": "models/6/poster.webp",
+      "description": "Added flare skirt, shown on the mannequin at true size."
+    },
+    {
       "id": "7",
       "name": "Godet Skirt",
       "glb": "models/7/model.glb",
@@ -50,6 +57,62 @@
       "glb": "models/8/model.glb",
       "poster": "models/8/poster.webp",
       "description": "Gore skirt, shown on the mannequin at true size."
+    },
+    {
+      "id": "9",
+      "name": "Quarter Circle Skirt",
+      "glb": "models/9/model.glb",
+      "poster": "models/9/poster.webp",
+      "description": "Quarter circle skirt, shown on the mannequin at true size."
+    },
+    {
+      "id": "10",
+      "name": "Half Circle Skirt",
+      "glb": "models/10/model.glb",
+      "poster": "models/10/poster.webp",
+      "description": "Half circle skirt, shown on the mannequin at true size."
+    },
+    {
+      "id": "11",
+      "name": "Three Fourth Circle Skirt",
+      "glb": "models/11/model.glb",
+      "poster": "models/11/poster.webp",
+      "description": "Three-fourth circle skirt, shown at true size."
+    },
+    {
+      "id": "12",
+      "name": "Full Circle Skirt",
+      "glb": "models/12/model.glb",
+      "poster": "models/12/poster.webp",
+      "description": "Full circle skirt, shown on the mannequin at true size."
+    },
+    {
+      "id": "13",
+      "name": "Gathered Skirt x2",
+      "glb": "models/13/model.glb",
+      "poster": "models/13/poster.webp",
+      "description": "Gathered skirt, twice the waist width, shown on the mannequin at true size."
+    },
+    {
+      "id": "14",
+      "name": "Gathered Skirt x3",
+      "glb": "models/14/model.glb",
+      "poster": "models/14/poster.webp",
+      "description": "Gathered skirt, three times the waist width, shown on the mannequin at true size."
+    },
+    {
+      "id": "15",
+      "name": "Gathered Skirt x4",
+      "glb": "models/15/model.glb",
+      "poster": "models/15/poster.webp",
+      "description": "Gathered skirt, four times the waist width, shown on the mannequin at true size."
+    },
+    {
+      "id": "16",
+      "name": "Gathered Skirt with Yoke",
+      "glb": "models/16/model.glb",
+      "poster": "models/16/poster.webp",
+      "description": "Gathered skirt with yoke, shown on the mannequin at true size."
     }
   ]
 }

@@ -362,12 +362,21 @@ for obj in trim_meshes:
 if trim_meshes:
     print(f"trims total: {sum(trim_faces.values())} -> {sum(len(o.data.polygons) for o in trim_meshes)} tris")
 if avatar is not None:
-    for n, s in junk.items():
-        b, a = decimate_group(avatar, s['verts'], s['faces'], JUNK_TARGET / s['faces'], "junk_" + s['slot'].__str__())
-        print(f"Avatar junk {n}: {b} -> {a} tris (flat slab of {s['faces']} faces)")
+    # each pass renumbers vertices, so the next group's indices are recomputed from a fresh material scan
+    for n in list(junk):
+        cur = slot_stats(avatar).get(n)
+        if not cur:
+            continue
+        b, a = decimate_group(avatar, cur['verts'], cur['faces'], JUNK_TARGET / cur['faces'], "junk_" + str(cur['slot']))
+        avatar.data.validate(verbose=False)
+        print(f"Avatar junk {n}: {b} -> {a} tris (flat slab of {cur['faces']} faces)")
     if body_faces:
-        verts = np.unique(np.concatenate([s['verts'] for n, s in st.items() if classes.get(n) == 'body']))
-        b, a = decimate_group(avatar, verts, body_faces, body_target / body_faces, "body")
+        cur = slot_stats(avatar)
+        body_now = [s for n, s in cur.items() if classes.get(n) == 'body']
+        faces_now = sum(s['faces'] for s in body_now)
+        verts = np.unique(np.concatenate([s['verts'] for s in body_now]))
+        b, a = decimate_group(avatar, verts, faces_now, body_target / max(faces_now, 1), "body")
+        avatar.data.validate(verbose=False)
         print(f"Avatar body: {b} -> {a} tris")
 total_now = sum(len(o.data.polygons) for o in meshes)
 print(f"TOTAL after decimation: {total_now} tris")
