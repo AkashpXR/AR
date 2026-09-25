@@ -1,3 +1,6 @@
 __pycache__/
 *.pyc
 _tex/
+_usd/
+# raw garment sources (CLO glb, raw video, pattern image): never committed or published
+source/

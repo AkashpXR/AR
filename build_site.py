@@ -145,13 +145,20 @@ def url_path(site_relative_path):
 
 
 def discover_media(m):
-    """Return (video, pattern) as docs-relative paths, honouring models.json overrides."""
+    """Return (video, pattern) as docs-relative paths, honouring models.json overrides.
+
+    Preferred: docs/models/<id>/intro.mp4 and docs/models/<id>/patterns.* (written by make_garment.py).
+    Fallback: the first .mp4 / image in docs/Resources/<id>/ (older layout)."""
+    model_dir = os.path.join(SITE, "models", str(m["id"]))
     res_dir = os.path.join(SITE, "Resources", str(m["id"]))
     video = m.get("video")
     pattern = m.get("pattern")
-    optimised = os.path.join("models", str(m["id"]), "intro.mp4")
-    if not video and os.path.isfile(os.path.join(SITE, optimised)):
-        video = optimised
+    if not video and os.path.isfile(os.path.join(model_dir, "intro.mp4")):
+        video = os.path.join("models", str(m["id"]), "intro.mp4")
+    if not pattern:
+        found = sorted(f for ext in ("patterns.png", "patterns.jpg", "patterns.webp") for f in glob.glob(os.path.join(model_dir, ext)))
+        if found:
+            pattern = os.path.relpath(found[0], SITE)
     if not video:
         found = sorted(glob.glob(os.path.join(res_dir, "*.mp4")) + glob.glob(os.path.join(res_dir, "*.MP4")))
         if found:

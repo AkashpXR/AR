@@ -1,35 +1,54 @@
 """Blender headless: CLO .glb -> web-optimised model.glb (Draco) + model.usdz + poster.webp
 
-usage: blender -b --python glb_to_web.py -- <in.glb> <out_dir> [cloth_ratio] [skin_ratio]
+usage: blender -b --python glb_to_web.py -- <in.glb> <out_dir> [cloth_ratio] [skin_ratio] [scale] [hair=A,B] [skin=C,D]
+
+Hair and skin materials on the mannequin are detected automatically (CLO gives every export new material
+names): hair = alpha-textured materials in the head region, skin = the large opaque textured materials.
+Override with hair=Name1,Name2 / skin=Name1,Name2 if the printed detection is wrong.
 """
 import bpy, sys, os, re, json, struct, shutil, subprocess
 import numpy as np
 from mathutils import Vector
 
 argv = sys.argv[sys.argv.index("--") + 1:]
-src, out_dir = os.path.abspath(argv[0]), os.path.abspath(argv[1])   # absolute: Blender resolves texture paths against its own cwd
-cloth_ratio = float(argv[2]) if len(argv) > 2 else 0.35
-skin_ratio = float(argv[3]) if len(argv) > 3 else 0.5
-model_scale = float(argv[4]) if len(argv) > 4 else 1.0   # uniform scale baked into the geometry (0.9 tuned in Unity)
+positional = [a for a in argv if "=" not in a]
+overrides = dict(a.split("=", 1) for a in argv if "=" in a)
+src, out_dir = os.path.abspath(positional[0]), os.path.abspath(positional[1])   # absolute: Blender resolves texture paths against its own cwd
+cloth_ratio = float(positional[2]) if len(positional) > 2 else 0.35
+skin_ratio = float(positional[3]) if len(positional) > 3 else 0.5
+model_scale = float(positional[4]) if len(positional) > 4 else 1.0   # uniform scale baked into the geometry (0.9 tuned in Unity)
+HAIR_OVERRIDE = {s.strip() for s in overrides.get("hair", "").split(",") if s.strip()}
+SKIN_OVERRIDE = {s.strip() for s in overrides.get("skin", "").split(",") if s.strip()}
 os.makedirs(out_dir, exist_ok=True)
-HAIR = {"Material154152", "Material154157", "Material154162"}
 HAIR_CUTOFF = 0.3   # alpha-clip threshold the user settled on in Unity; hair is matte, double-sided cutout
-SKIN = {"Material154167", "Material154171", "Material154175", "Material154179"}
 
 bpy.ops.wm.read_factory_settings(use_empty=True)
 bpy.ops.import_scene.gltf(filepath=src)
 meshes = [o for o in bpy.data.objects if o.type == 'MESH']
+if not meshes:
+    sys.exit("no meshes in " + src)
 
 # ---- flatten hierarchy
 for obj in meshes:
     mw = obj.matrix_world.copy(); obj.parent = None; obj.matrix_world = mw
 for e in [o for o in bpy.data.objects if o.type == 'EMPTY']:
     bpy.data.objects.remove(e, do_unlink=True)
-for obj in meshes:
-    if obj.name.startswith('Obj_Avatar'):
-        obj.name = 'Avatar'; obj.data.name = 'Avatar'
-    if obj.name == 'Cloth':
-        obj.data.name = 'Cloth'
+
+
+def z_extent(o):
+    co = np.empty(len(o.data.vertices) * 3, dtype=np.float32)
+    o.data.vertices.foreach_get("co", co)
+    z = co.reshape(-1, 3)[:, 2]
+    return float(z.max() - z.min()) if len(z) else 0.0
+
+
+# the mannequin: named like "avatar" by CLO, otherwise the tallest mesh; everything else is cloth
+avatar = next((o for o in meshes if 'avatar' in o.name.lower()), None) or max(meshes, key=z_extent)
+avatar.name = 'Avatar'; avatar.data.name = 'Avatar'
+cloth_meshes = [o for o in meshes if o is not avatar]
+if len(cloth_meshes) == 1:
+    cloth_meshes[0].name = 'Cloth'; cloth_meshes[0].data.name = 'Cloth'
+print("avatar:", avatar.name, "cloth:", [o.name for o in cloth_meshes])
 
 # ---- uniform scale baked into the vertices
 if abs(model_scale - 1.0) > 1e-6:
@@ -128,27 +147,115 @@ for m in list(bpy.data.materials):
 for m in bpy.data.materials:
     m.name = base_name(m.name)
 
+
+# ---- detect hair and skin materials on the mannequin
+def principled(mat):
+    return next((n for n in mat.node_tree.nodes if n.type == 'BSDF_PRINCIPLED'), None) if mat.node_tree else None
+
+
+def base_color_image(mat):
+    """The image texture feeding Base Color, looking through mix/multiply nodes."""
+    bsdf = principled(mat)
+    if bsdf is None or not bsdf.inputs['Base Color'].is_linked:
+        return None
+    stack = [bsdf.inputs['Base Color'].links[0].from_node]; seen = set()
+    while stack:
+        n = stack.pop()
+        if n.name in seen:
+            continue
+        seen.add(n.name)
+        if n.type == 'TEX_IMAGE':
+            return n.image
+        for i in n.inputs:
+            for l in i.links:
+                stack.append(l.from_node)
+    return None
+
+
+_alpha_cache = {}
+
+
+def image_has_alpha(img):
+    if img is None:
+        return False
+    if img.name not in _alpha_cache:
+        w, h = img.size
+        if w == 0 or h == 0:
+            _alpha_cache[img.name] = False
+        else:
+            px = np.empty(w * h * 4, dtype=np.float32)
+            img.pixels.foreach_get(px)
+            _alpha_cache[img.name] = bool(px[3::4].min() < 0.98)
+    return _alpha_cache[img.name]
+
+
+def slot_stats(obj):
+    me = obj.data
+    co = np.empty(len(me.vertices) * 3, dtype=np.float32); me.vertices.foreach_get("co", co); co = co.reshape(-1, 3)
+    pmat = np.empty(len(me.polygons), dtype=np.int32); me.polygons.foreach_get("material_index", pmat)
+    ltot = np.empty(len(me.polygons), dtype=np.int32); me.polygons.foreach_get("loop_total", ltot)
+    lverts = np.empty(len(me.loops), dtype=np.int32); me.loops.foreach_get("vertex_index", lverts)
+    loop_mat = np.repeat(pmat, ltot)
+    stats = {}
+    for si, mat in enumerate(me.materials):
+        if mat is None:
+            continue
+        vs = lverts[loop_mat == si]
+        if len(vs) == 0:
+            continue
+        z = co[vs, 2]
+        stats[mat.name] = dict(faces=int((pmat == si).sum()), zmean=float(z.mean()), zmin=float(z.min()), zmax=float(z.max()),
+                               centroid=co[vs].mean(axis=0))
+    return stats
+
+
+def is_blended(mat):
+    return getattr(mat, 'surface_render_method', '') == 'BLENDED' or getattr(mat, 'blend_method', '') == 'BLEND'
+
+
+print("=== MATERIAL DETECTION (avatar) ===")
+st = slot_stats(avatar)
+total_faces = sum(s['faces'] for s in st.values()) or 1
+zlo = min(s['zmin'] for s in st.values()); zhi = max(s['zmax'] for s in st.values()); H = max(zhi - zlo, 1e-6)
+detected_hair, detected_skin, eyes_candidates = set(), set(), []
+for mat in avatar.data.materials:
+    s = st.get(mat.name) if mat else None
+    if not s:
+        continue
+    img = base_color_image(mat)
+    blended = is_blended(mat)
+    alpha_tex = image_has_alpha(img)
+    frac = s['faces'] / total_faces
+    head = (s['zmean'] - zlo) > 0.72 * H
+    tag = '-'
+    if (blended or alpha_tex) and head and frac >= 0.01:
+        detected_hair.add(mat.name); tag = 'HAIR'
+    elif not blended and img is not None and frac >= 0.03:
+        detected_skin.add(mat.name); tag = 'SKIN'
+    elif not blended and img is not None and head:
+        eyes_candidates.append(mat.name); tag = 'eyes?'
+    print(f"  {mat.name}: faces={s['faces']} ({frac:.1%}) z={s['zmin']:.2f}..{s['zmax']:.2f} blended={blended} alphaTex={alpha_tex} -> {tag}")
+HAIR = HAIR_OVERRIDE or detected_hair
+SKIN = SKIN_OVERRIDE or detected_skin
+print("HAIR:", sorted(HAIR), "(override)" if HAIR_OVERRIDE else "(detected)")
+print("SKIN:", sorted(SKIN), "(override)" if SKIN_OVERRIDE else "(detected)")
+if not HAIR:
+    print("WARNING: no hair materials detected; pass hair=Name1,Name2 if the mannequin has hair")
+if not SKIN:
+    print("WARNING: no skin materials detected; the avatar will not be decimated")
+
 # ---- material fixes: bypass "black factor x texture" mixes, blend/cull flags
 print("=== MATERIAL FIXES ===")
 for mat in bpy.data.materials:
     nt = mat.node_tree
-    bsdf = next((n for n in nt.nodes if n.type == 'BSDF_PRINCIPLED'), None)
+    bsdf = principled(mat)
     if bsdf is None:
         continue
     inp = bsdf.inputs['Base Color']
     if inp.is_linked and inp.links[0].from_node.type != 'TEX_IMAGE':
         srcn = inp.links[0].from_node
-        stack = [srcn]; seen = set(); tex = None
-        while stack:
-            n = stack.pop()
-            if n.name in seen:
-                continue
-            seen.add(n.name)
-            if n.type == 'TEX_IMAGE':
-                tex = n; break
-            for i in n.inputs:
-                for l in i.links:
-                    stack.append(l.from_node)
+        tex_img = base_color_image(mat)
+        tex = next((n for n in nt.nodes if n.type == 'TEX_IMAGE' and n.image == tex_img), None) if tex_img else None
         if tex is not None:
             nt.links.new(tex.outputs['Color'], inp)
             print(f"{mat.name}: relinked {tex.image.name} directly (bypassed {srcn.type})")
@@ -182,10 +289,14 @@ for obj in meshes:
     mod = obj.modifiers.new("dec", 'DECIMATE')
     mod.decimate_type = 'COLLAPSE'
     mod.use_collapse_triangulate = True
-    if obj.name == 'Cloth':
+    if obj is not avatar:
         mod.ratio = cloth_ratio
     else:
         skin_idx = {i for i, m in enumerate(me.materials) if m and m.name in SKIN}
+        if not skin_idx:
+            obj.modifiers.remove(mod)
+            print(f"{obj.name}: skipped (no skin materials)")
+            continue
         vg = obj.vertex_groups.new(name="skin")
         verts = set()
         for p in me.polygons:
@@ -248,28 +359,15 @@ for img in list(bpy.data.images):
     print(f"{img.name}: {w}x{h} -> {nw}x{nh} {fmt} {os.path.getsize(path)} bytes colorspace={new.colorspace_settings.name}{' HARD-ALPHA(hair)' if hard_alpha else ''}")
     bpy.data.images.remove(img)
 
-# ---- face direction (eyes vs head) for the poster camera
-av = next(o for o in meshes if o.name == 'Avatar')
-me = av.data
-verts = np.empty(len(me.vertices) * 3, dtype=np.float32); me.vertices.foreach_get("co", verts); verts = verts.reshape(-1, 3)
-
-
-def centroid(matname):
-    idx = next((i for i, m in enumerate(me.materials) if m and m.name == matname), None)
-    if idx is None:
-        return None
-    vs = set()
-    for p in me.polygons:
-        if p.material_index == idx:
-            vs.update(p.vertices)
-    return verts[list(vs)].mean(axis=0)
-
-
-eyes, head = centroid("Material154183"), centroid("Material154167")
-if eyes is not None and head is not None:
-    fwd = Vector((float(eyes[0] - head[0]), float(eyes[1] - head[1]), 0.0)).normalized()
-else:
-    fwd = Vector((0.0, -1.0, 0.0))
+# ---- face direction for the poster camera: from the head's skin to the eyes if we can find them, else CLO's default (-Y)
+fwd = Vector((0.0, -1.0, 0.0))
+head_skins = [n for n in SKIN if n in st and (st[n]['zmean'] - zlo) > 0.72 * H]
+if head_skins and eyes_candidates:
+    head_c = st[max(head_skins, key=lambda n: st[n]['faces'])]['centroid']
+    eyes_c = st[min(eyes_candidates, key=lambda n: st[n]['faces'])]['centroid']
+    v = Vector((float(eyes_c[0] - head_c[0]), float(eyes_c[1] - head_c[1]), 0.0))
+    if v.length > 0.01:
+        fwd = v.normalized()
 print("forward (blender xy):", tuple(round(v, 3) for v in fwd))
 
 # ---- exports
@@ -336,6 +434,7 @@ poster = os.path.join(out_dir, "poster.webp")
 scene.render.filepath = poster
 bpy.ops.render.render(write_still=True)
 print("POSTER", os.path.getsize(poster) if os.path.exists(poster) else "missing")
+shutil.rmtree(tex_dir, ignore_errors=True)
 
 # ---- post-pass on the GLB json: enforce hair flags, report
 with open(glb_path, "rb") as f:

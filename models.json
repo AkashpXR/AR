@@ -1,5 +1,6 @@
 {
   "brand": "Garments AR",
+  "base_url": "https://akashpxr.github.io/AR/",
   "models": [
     {
       "id": "1",
