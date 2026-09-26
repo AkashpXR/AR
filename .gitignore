@@ -4,3 +4,6 @@ _tex/
 _usd/
 # raw garment sources (CLO glb, raw video, pattern image): never committed or published
 source/
+# QA renders from make_garment.py (front/back checks)
+qa/
+.claude/

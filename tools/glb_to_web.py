@@ -40,9 +40,14 @@ meshes = [o for o in bpy.data.objects if o.type == 'MESH']
 if not meshes:
     sys.exit("no meshes in " + src)
 
-# ---- flatten hierarchy
+# ---- flatten hierarchy and bake every object transform into its vertices (local == world from here on;
+# the coverage test and the height-based classification rely on that)
+from mathutils import Matrix
 for obj in meshes:
-    mw = obj.matrix_world.copy(); obj.parent = None; obj.matrix_world = mw
+    mw = obj.matrix_world.copy(); obj.parent = None
+    obj.data.transform(mw)
+    obj.matrix_world = Matrix.Identity(4)
+    obj.data.update()
 for e in [o for o in bpy.data.objects if o.type == 'EMPTY']:
     bpy.data.objects.remove(e, do_unlink=True)
 
@@ -298,6 +303,156 @@ for mat in bpy.data.materials:
                 break
 
 
+# ---- hide the mannequin under the garments
+# CLO exports often leave skin poking through the fabric (unresolved simulation at the back of tight skirts), and
+# once both surfaces are decimated they cross wherever the fabric lies a few millimetres off the skin. Three
+# passes over the mannequin below the head (parts are the avatar's materials; head, hair and eyes are never touched):
+#  1. push: along each skin vertex's normal the fabric layers are probed from 1 cm outside down to 8 cm inside
+#     the skin; when no layer sits at least 6 mm outside the skin (the skin is at the surface of the garment or
+#     pokes through it) the vertex is moved inward until it sits 6 mm under the innermost layer. Only on parts whose winding is
+#     consistent, so the normal direction is reliable (signed volume fixes inverted parts); a penetrating layer
+#     must lie in the near half of the part's thickness, which keeps thin parts (fingers) safe and stops front
+#     skin from chasing a panel that penetrates the back.
+#  2. visibility: a skin vertex is hidden when rays towards ~40 directions around the model (viewers from the
+#     sides, up to 45 degrees above and slightly below) are all blocked by opaque cloth or by the mannequin itself. Both sides of
+#     the surface are tested, so inconsistently wound parts (boots) cannot open holes.
+#  3. fully hidden regions are deleted, keeping a one-ring rim.
+VIS_DIRS, VIS_MIN_Z, VIS_MAX_Z, PROBE, NEAR_IN, CLEAR = 64, -0.35, 0.7, 0.01, 0.08, 0.006
+if avatar is not None and cloth_meshes:
+    from mathutils.bvhtree import BVHTree
+    import bmesh
+    me = avatar.data
+    nv = len(me.vertices)
+    co = np.empty(nv * 3, dtype=np.float32); me.vertices.foreach_get("co", co); co = co.reshape(-1, 3)
+    nrm = np.empty(nv * 3, dtype=np.float32); me.vertex_normals.foreach_get("vector", nrm); nrm = nrm.reshape(-1, 3)
+    pmat = np.empty(len(me.polygons), dtype=np.int32); me.polygons.foreach_get("material_index", pmat)
+    ltot = np.empty(len(me.polygons), dtype=np.int32); me.polygons.foreach_get("loop_total", ltot)
+    lstart = np.empty(len(me.polygons), dtype=np.int32); me.polygons.foreach_get("loop_start", lstart)
+    lverts = np.empty(len(me.loops), dtype=np.int32); me.loops.foreach_get("vertex_index", lverts)
+    loop_mat = np.repeat(pmat, ltot)
+    lower = [n for n in st if classes.get(n) == 'body' and (st[n]['zmean'] - zlo) <= 0.72 * H]
+    lower_slots = np.array([st[n]['slot'] for n in lower], dtype=np.int32)
+
+    # winding per part: share of shared edges that the two faces run in opposite directions (1 = consistent);
+    # the signed volume about the part's centroid then tells outward from inward
+    nxt = np.arange(len(me.loops)) + 1
+    nxt[lstart + ltot - 1] = lstart
+    ea, eb = lverts.astype(np.int64), lverts[nxt].astype(np.int64)
+    fwd, rev = ea * nv + eb, eb * nv + ea
+    uniq, counts = np.unique(fwd, return_counts=True)
+    dup = np.isin(fwd, uniq[counts > 1])
+    opp = np.isin(fwd, rev)
+    v0, v1, v2 = lverts[lstart], lverts[np.minimum(lstart + 1, len(lverts) - 1)], lverts[np.minimum(lstart + 2, len(lverts) - 1)]
+    winding = {}
+    for n in lower:
+        sl = st[n]['slot']; fm = pmat == sl; lm = loop_mat == sl
+        cen = st[n]['centroid']
+        a, b, c = co[v0[fm]] - cen, co[v1[fm]] - cen, co[v2[fm]] - cen
+        vol = float(np.einsum('ij,ij->i', a, np.cross(b, c)).sum() / 6.0)
+        cons = int((opp & ~dup & lm).sum()); inc = int((dup & lm).sum())
+        ratio = cons / max(cons + inc, 1)
+        winding[n] = (ratio, vol)
+        if ratio >= 0.9 and vol < 0:
+            nrm[st[n]['verts']] *= -1.0
+            print(f"COVER {n}: normals inverted, flipped")
+
+    # occluders: opaque cloth (alpha-blended materials such as hair cards and zipper teeth do not hide anything)
+    # plus the lower mannequin parts themselves (legs inside boots)
+    def mesh_arrays(o):
+        m = o.data
+        c = np.empty(len(m.vertices) * 3, dtype=np.float32); m.vertices.foreach_get("co", c); c = c.reshape(-1, 3)
+        pm = np.empty(len(m.polygons), dtype=np.int32); m.polygons.foreach_get("material_index", pm)
+        lt = np.empty(len(m.polygons), dtype=np.int32); m.polygons.foreach_get("loop_total", lt)
+        ls = np.empty(len(m.polygons), dtype=np.int32); m.polygons.foreach_get("loop_start", ls)
+        lv = np.empty(len(m.loops), dtype=np.int32); m.loops.foreach_get("vertex_index", lv)
+        return c, pm, lt, ls, lv
+    cloth_verts, cloth_polys, base = [], [], 0
+    for o in cloth_meshes:
+        if not len(o.data.polygons):
+            continue
+        c, pm, lt, ls, lv = mesh_arrays(o)
+        opaque = np.array([m is None or not (is_blended(m) and image_has_alpha(base_color_image(m))) for m in o.data.materials] or [True], dtype=bool)
+        keep = opaque[np.clip(pm, 0, len(opaque) - 1)]
+        cloth_polys += [tuple(int(x) + base for x in lv[s:s + t]) for s, t, k in zip(ls.tolist(), lt.tolist(), keep.tolist()) if k]
+        cloth_verts += [tuple(v) for v in c.tolist()]; base += len(c)
+    body_keep = np.isin(pmat, lower_slots)
+    body_polys = [tuple(int(x) for x in lverts[s:s + t]) for s, t, k in zip(lstart.tolist(), ltot.tolist(), body_keep.tolist()) if k]
+    cloth_bvh = BVHTree.FromPolygons(cloth_verts, cloth_polys, all_triangles=False) if cloth_polys else None
+    body_bvh = BVHTree.FromPolygons([tuple(v) for v in co.tolist()], body_polys, all_triangles=False)
+    test_verts = np.unique(np.concatenate([st[n]['verts'] for n in lower])) if lower else np.array([], dtype=np.int32)
+
+    # 1. push skin back under the fabric
+    slot_ok = {st[n]['slot'] for n in lower if winding[n][0] >= 0.9}
+    vslot = np.full(nv, -1, dtype=np.int32); vslot[lverts] = loop_mat
+    pushed_in = pushed_clear = 0; max_push = 0.0
+    if cloth_bvh is not None:
+        for vi in test_verts.tolist():
+            if vslot[vi] not in slot_ok:
+                continue
+            p = Vector(co[vi]); n = Vector(nrm[vi])
+            if n.length < 1e-6:
+                continue
+            # fabric layers along the normal, from PROBE outside the skin down to NEAR_IN inside it (f > 0: outside)
+            f_min = f_max = None; travelled = 0.0
+            while travelled < PROBE + NEAR_IN:
+                hit = cloth_bvh.ray_cast(p + n * (PROBE - travelled), -n, PROBE + NEAR_IN - travelled)
+                if hit[0] is None:
+                    break
+                travelled += hit[3] + 0.0002
+                f = PROBE - travelled
+                f_min = f if f_min is None else min(f_min, f)
+                f_max = f if f_max is None else max(f_max, f)
+            if f_min is None or f_max >= CLEAR:   # nothing there, or the outermost layer already covers this skin
+                continue
+            if f_min < 0:   # the skin pokes through: only if that fabric is in the near half of the part's thickness
+                wall = body_bvh.ray_cast(p - n * 0.001, -n, 1.0)
+                if -f_min >= (0.5 * wall[3] if wall[0] is not None else 0.02):
+                    continue
+                pushed_in += 1
+            else:
+                pushed_clear += 1
+            move = CLEAR - f_min
+            co[vi] -= nrm[vi] * move; max_push = max(max_push, move)
+        me.vertices.foreach_set("co", co.ravel()); me.update()
+        body_bvh = BVHTree.FromPolygons([tuple(v) for v in co.tolist()], body_polys, all_triangles=False)
+    occ_verts = cloth_verts + [tuple(v) for v in co.tolist()]
+    occ_polys = cloth_polys + [tuple(x + base for x in poly) for poly in body_polys]
+    occ_bvh = BVHTree.FromPolygons(occ_verts, occ_polys, all_triangles=False)
+
+    # 2. visibility from ~40 directions: a Fibonacci sphere without the steep views from below (nobody looks up a
+    #    hem) or from above (such rays slide up the gap between skin and fabric and escape through the neckline)
+    kk = np.arange(VIS_DIRS) + 0.5
+    phi = np.arccos(1 - 2 * kk / VIS_DIRS); theta = np.pi * (1 + 5 ** 0.5) * kk
+    dirs = np.stack([np.cos(theta) * np.sin(phi), np.sin(theta) * np.sin(phi), np.cos(phi)], axis=1).astype(np.float32)
+    dirs = dirs[(dirs[:, 2] >= VIS_MIN_Z) & (dirs[:, 2] <= VIS_MAX_Z)]
+    dvec = [Vector(d) for d in dirs.tolist()]
+    dots = nrm[test_verts] @ dirs.T if len(test_verts) else np.zeros((0, len(dirs)))
+    hidden = np.zeros(nv, dtype=bool)
+    for row, vi in enumerate(test_verts.tolist()):
+        p = Vector(co[vi]); n = Vector(nrm[vi])
+        if n.length < 1e-6:
+            continue
+        vis = False
+        for j in np.nonzero(np.abs(dots[row]) >= 0.15)[0].tolist():
+            if occ_bvh.ray_cast(p + n * (0.002 if dots[row, j] > 0 else -0.002), dvec[j], 8.0)[0] is None:
+                vis = True; break
+        hidden[vi] = not vis
+
+    # 3. delete what nobody can see, eroded by one vertex ring
+    ev = np.empty(len(me.edges) * 2, dtype=np.int32); me.edges.foreach_get("vertices", ev); ev = ev.reshape(-1, 2)
+    exposed_edge = ~hidden[ev[:, 0]] | ~hidden[ev[:, 1]]
+    rim = np.zeros(nv, dtype=bool); rim[ev[exposed_edge].ravel()] = True
+    deletable = hidden & ~rim
+    bm = bmesh.new(); bm.from_mesh(me); bm.verts.ensure_lookup_table(); bm.faces.ensure_lookup_table()
+    del_faces = [f for f in bm.faces if all(deletable[v.index] for v in f.verts)]
+    n_faces_before = len(bm.faces)
+    if del_faces:
+        bmesh.ops.delete(bm, geom=del_faces, context='FACES')
+    bm.to_mesh(me); bm.free(); me.update()
+    print("COVER parts:", {n: f"hidden {int(hidden[st[n]['verts']].sum())}/{len(st[n]['verts'])} winding {winding[n][0]:.2f} vol {winding[n][1]:+.4f}" for n in lower})
+    print(f"COVER lower-body verts={len(test_verts)} pushed back inside={pushed_in} clearance={pushed_clear} (max {max_push * 1000:.0f} mm) hidden={int(hidden.sum())} faces removed={n_faces_before - len(me.polygons)}")
+    st = slot_stats(avatar)   # refresh stats: face counts changed
+
 # ---- decimation against the global budget
 def apply_mod(obj, mod):
     bpy.context.view_layer.objects.active = obj
@@ -435,12 +590,14 @@ for img in list(bpy.data.images):
     print(f"TEX {img.name}: {w}x{h} -> {nw}x{nh} {fmt} {os.path.getsize(path)} bytes{' HARD-ALPHA(hair)' if hard_alpha else ''}")
     bpy.data.images.remove(img)
 
-# ---- face direction for the poster camera: from the head's skin to the eyes if we can find them, else CLO's default (-Y)
+# ---- face direction for the poster camera: from the head's skin to the face parts (eyes, lashes, brows: all of
+# them averaged, since some exports split the eyes into a left and a right material) if we can find them, else
+# CLO's default (-Y)
 fwd = Vector((0.0, -1.0, 0.0))
 head_bodies = [n for n, s in st.items() if classes.get(n) == 'body' and (s['zmean'] - zlo) > 0.72 * H]
 if avatar is not None and head_bodies and eyes_candidates:
     head_c = st[max(head_bodies, key=lambda n: st[n]['faces'])]['centroid']
-    eyes_c = st[min(eyes_candidates, key=lambda n: st[n]['faces'])]['centroid']
+    eyes_c = np.mean([st[n]['centroid'] for n in eyes_candidates if n in st], axis=0)
     v = Vector((float(eyes_c[0] - head_c[0]), float(eyes_c[1] - head_c[1]), 0.0))
     if v.length > 0.01:
         fwd = v.normalized()
@@ -512,6 +669,17 @@ poster = os.path.join(out_dir, "poster.webp")
 scene.render.filepath = poster
 bpy.ops.render.render(write_still=True)
 print("POSTER", os.path.getsize(poster) if os.path.exists(poster) else "missing")
+# optional QA renders (front and back, not published): qa_dir=<folder>
+qa_dir = overrides.get("qa_dir")
+if qa_dir:
+    os.makedirs(qa_dir, exist_ok=True)
+    scene.render.resolution_x = scene.render.resolution_y = 640
+    for tag, direction in (("front", fwd), ("back", -fwd)):
+        cam.location = target + direction * 2.9 + Vector((0.0, 0.0, 0.35))
+        cam.rotation_euler = (target - cam.location).to_track_quat('-Z', 'Y').to_euler()
+        scene.render.filepath = os.path.join(qa_dir, f"{tag}.webp")
+        bpy.ops.render.render(write_still=True)
+    print("QA renders:", qa_dir)
 shutil.rmtree(tex_dir, ignore_errors=True)
 
 # ---- post-pass on the GLB json: enforce hair and opaque flags, report

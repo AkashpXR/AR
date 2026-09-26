@@ -159,13 +159,26 @@ const scenePipelineModule = () => {
   let pinch = null          // {startDist, startScale} while two fingers are on the screen
   let smoothPos = null, smoothQuat = null, trackingBad = false
 
-  const loadModel = () => {
+  const loadModel = (renderer) => {
     const draco = new DRACOLoader().setDecoderPath(DRACO_PATH)
     const loader = new GLTFLoader().setDRACOLoader(draco)
+    // The mannequin is drawn a few millimetres further back in the depth buffer than where it really is, so
+    // wherever the garment and the skin nearly touch the fabric wins (the residual poke-through that the
+    // export-time culling leaves next to hems and necklines). Scaled to the depth buffer's precision.
+    const gl = renderer.getContext()
+    const depthUnits = 1500 * Math.pow(2, (gl.getParameter(gl.DEPTH_BITS) || 24) - 24)
     return new Promise((resolve, reject) => {
       loader.load('../' + entry.glb, (gltf) => {
         const root = gltf.scene
-        root.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.frustumCulled = false } })
+        root.traverse((o) => {
+          if (!o.isMesh) return
+          o.castShadow = true; o.frustumCulled = false
+          if (/avatar/i.test(o.name)) {
+            for (const m of Array.isArray(o.material) ? o.material : [o.material]) {
+              m.polygonOffset = true; m.polygonOffsetFactor = 1; m.polygonOffsetUnits = depthUnits
+            }
+          }
+        })
         const box = new THREE.Box3().setFromObject(root)
         const size = new THREE.Vector3(); box.getSize(size)
         const center = new THREE.Vector3(); box.getCenter(center)
@@ -210,7 +223,7 @@ const scenePipelineModule = () => {
     shadowPlane.visible = false
     scene.add(shadowPlane)
     camera.position.set(0, CAMERA_HEIGHT, 0)
-    loadModel().then((root) => {
+    loadModel(renderer).then((root) => {
       model = root; model.visible = false; scene.add(model)
       if (!placed) setHint(SCAN_HINT)
     }).catch((e) => {
@@ -284,7 +297,12 @@ const scenePipelineModule = () => {
     onStart: ({canvas}) => {
       const {scene, camera, renderer} = XR8.Threejs.xrScene()
       initXrScene({scene, camera, renderer})
-      XR8.XrController.updateCameraProjectionMatrix({origin: camera.position, facing: camera.quaternion})
+      // a tight depth range gives the depth buffer far more precision at arm's length, which keeps
+      // cloth and skin surfaces millimetres apart from z-fighting
+      XR8.XrController.updateCameraProjectionMatrix({
+        origin: camera.position, facing: camera.quaternion,
+        cam: {pixelRectWidth: canvas.width, pixelRectHeight: canvas.height, nearClipPlane: 0.1, farClipPlane: 60},
+      })
       canvas.addEventListener('touchmove', (e) => e.preventDefault(), {passive: false})
       canvas.addEventListener('touchstart', (e) => {
         if (e.touches.length === 2) {
