@@ -88,16 +88,18 @@ def main():
         filtered_tmp = os.path.join(tempfile.gettempdir(), f"garment_{a.id}_filtered.glb")
         glb_in, info = prefilter(glb, filtered_tmp)
         if info["stripped"]:
-            print(f"    WARNING: {info['trims']} topstitch meshes ({info['trim_tris']:,} tris) dropped before import (too heavy to process); stitching will not show in AR")
+            print(f"    NOTE: {info['trims']} topstitch meshes ({info['trim_tris']:,} tris) are too heavy to import; they will be baked into the fabric textures instead")
         elif info["trims"]:
             print(f"    topstitch meshes: {info['trims']} ({info['trim_tris']:,} tris) kept")
         qa_dir = os.path.join(ROOT, "qa", a.id)   # front/back check renders, git-ignored
         cmd = [blender, "-b", "--python", os.path.join(TOOLS, "glb_to_web.py"), "--", glb_in, out_dir, str(a.cloth), str(a.skin), str(a.scale), f"budget={a.budget}", f"qa_dir={qa_dir}"]
+        if info["stripped"]:
+            cmd.append("trims_src=" + glb)
         if a.hair:
             cmd.append("hair=" + a.hair)
         if a.usdz:
             cmd.append("usdz=1")
-        run(cmd, log_keep=["avatar:", "MAT ", "HAIR:", "NOTE:", "WARNING", "COVER", "PLAN", "tris", "TEX ", "USD hair", "usdz packaged", "USDZ", "images:", "FINAL GLB", "Traceback", "Error"])
+        run(cmd, log_keep=["avatar:", "MAT ", "HAIR:", "NOTE:", "WARNING", "COVER", "STITCH", "PLAN", "tris", "TEX ", "USD hair", "usdz packaged", "USDZ", "images:", "FINAL GLB", "Traceback", "Error"])
         for f in ("model.glb", "poster.webp") + (("model.usdz",) if a.usdz else ()):
             p = os.path.join(out_dir, f)
             print(f"    {f}: {os.path.getsize(p) / 1e6:.1f} MB" if os.path.isfile(p) else f"    {f}: MISSING")

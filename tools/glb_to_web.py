@@ -9,6 +9,7 @@ cards or as solid geometry), so the geometry is reduced against a global triangl
   trims_max=40000  all "BindedTrim" topstitch meshes together (each capped at trim_each=1500)
   hair=A,B         force these material names to be treated as alpha hair cards (else auto-detected)
   usdz=1           also build model.usdz
+  trims_src=<glb>  original export whose stripped topstitch meshes are baked into the fabric textures
 Hair cards (alpha-textured materials in the head region) are kept intact and exported as a matte,
 double-sided alpha cutout with hard-alpha textures; tiny materials (eyes, lashes) are kept intact.
 """
@@ -87,6 +88,16 @@ for mat in bpy.data.materials:
                 scl = srcn.inputs['Scale'].default_value
                 transforms[mat.name] = (loc[0], loc[1], rot[2], scl[0], scl[1])
                 mapping_nodes.setdefault(mat.name, set()).add(srcn.name)
+
+
+# ---- topstitch meshes the prefilter had to strip (too heavy to import) are baked into the fabric textures
+KEEP_2048 = set()
+trims_src = overrides.get("trims_src")
+if trims_src and cloth_meshes:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import stitch_bake
+    for line in stitch_bake.bake(trims_src, cloth_meshes, transforms, model_scale, KEEP_2048):
+        print("STITCH", line)
 
 
 def get_uvs(uvl, n):
@@ -259,6 +270,8 @@ for mat in (avatar.data.materials if avatar is not None else []):
         cls = 'tiny'
         if not blended and img is not None and head:
             eyes_candidates.append(mat.name)
+    elif blended and not alpha_tex and head:
+        cls = 'solidhair'   # hair modelled as solid strands (exported as blend without alpha): own decimation pool
     elif flat and s['faces'] > 50000:
         cls = 'junk'
     else:
@@ -266,7 +279,7 @@ for mat in (avatar.data.materials if avatar is not None else []):
     if cls != 'hair' and blended and not alpha_tex:
         make_opaque(mat); OPAQUE_FORCE.add(mat.name)
     classes[mat.name] = cls
-    print(f"MAT {cls:5s} {mat.name}: faces={s['faces']} z={s['zmin']:.2f}..{s['zmax']:.2f} blended={blended} alphaTex={alpha_tex}{' -> made opaque' if mat.name in OPAQUE_FORCE else ''}")
+    print(f"MAT {cls:9s} {mat.name}: faces={s['faces']} z={s['zmin']:.2f}..{s['zmax']:.2f} blended={blended} alphaTex={alpha_tex}{' -> made opaque' if mat.name in OPAQUE_FORCE else ''}")
 print("HAIR:", sorted(HAIR), "(override)" if HAIR_OVERRIDE else "(detected)")
 if avatar is not None and not HAIR:
     print("NOTE: no alpha hair cards on this mannequin (hair is solid geometry or absent)")
@@ -307,12 +320,13 @@ for mat in bpy.data.materials:
 # CLO exports often leave skin poking through the fabric (unresolved simulation at the back of tight skirts), and
 # once both surfaces are decimated they cross wherever the fabric lies a few millimetres off the skin. Three
 # passes over the mannequin below the head (parts are the avatar's materials; head, hair and eyes are never touched):
-#  1. push: along each skin vertex's normal the fabric layers are probed from 1 cm outside down to 8 cm inside
-#     the skin; when no layer sits at least 6 mm outside the skin (the skin is at the surface of the garment or
-#     pokes through it) the vertex is moved inward until it sits 6 mm under the innermost layer. Only on parts whose winding is
-#     consistent, so the normal direction is reliable (signed volume fixes inverted parts); a penetrating layer
-#     must lie in the near half of the part's thickness, which keeps thin parts (fingers) safe and stops front
-#     skin from chasing a panel that penetrates the back.
+#  1. push: along each skin vertex's normal the fabric layers (and other mannequin parts: boots over legs) are
+#     probed from 1 cm outside down to 8 cm inside the skin. When the innermost layer outside the skin is closer
+#     than 6 mm the vertex is moved to 6 mm under it; when nothing is outside but fabric is inside (the skin pokes
+#     through) it is moved to 6 mm under that fabric. Only on parts whose winding is consistent, so the normal
+#     direction is reliable (signed volume fixes inverted parts); a penetrating layer must lie in the near half
+#     of the part's thickness, which keeps thin parts (fingers) safe and stops front skin from chasing a panel
+#     that penetrates the back.
 #  2. visibility: a skin vertex is hidden when rays towards ~40 directions around the model (viewers from the
 #     sides, up to 45 degrees above and slightly below) are all blocked by opaque cloth or by the mannequin itself. Both sides of
 #     the surface are tested, so inconsistently wound parts (boots) cannot open holes.
@@ -375,10 +389,16 @@ if avatar is not None and cloth_meshes:
         keep = opaque[np.clip(pm, 0, len(opaque) - 1)]
         cloth_polys += [tuple(int(x) + base for x in lv[s:s + t]) for s, t, k in zip(ls.tolist(), lt.tolist(), keep.tolist()) if k]
         cloth_verts += [tuple(v) for v in c.tolist()]; base += len(c)
-    body_keep = np.isin(pmat, lower_slots)
-    body_polys = [tuple(int(x) for x in lverts[s:s + t]) for s, t, k in zip(lstart.tolist(), ltot.tolist(), body_keep.tolist()) if k]
+    lower_set = set(lower_slots.tolist())
+    part_polys = {}
+    for s_, t_, m_ in zip(lstart.tolist(), ltot.tolist(), pmat.tolist()):
+        if m_ in lower_set:
+            part_polys.setdefault(m_, []).append(tuple(int(x) for x in lverts[s_:s_ + t_]))
+    body_polys = [poly for polys in part_polys.values() for poly in polys]
+    co_list = [tuple(v) for v in co.tolist()]
     cloth_bvh = BVHTree.FromPolygons(cloth_verts, cloth_polys, all_triangles=False) if cloth_polys else None
-    body_bvh = BVHTree.FromPolygons([tuple(v) for v in co.tolist()], body_polys, all_triangles=False)
+    body_bvh = BVHTree.FromPolygons(co_list, body_polys, all_triangles=False)
+    part_bvh = {m_: BVHTree.FromPolygons(co_list, polys, all_triangles=False) for m_, polys in part_polys.items()}
     test_verts = np.unique(np.concatenate([st[n]['verts'] for n in lower])) if lower else np.array([], dtype=np.int32)
 
     # 1. push skin back under the fabric
@@ -393,25 +413,34 @@ if avatar is not None and cloth_meshes:
             if n.length < 1e-6:
                 continue
             # fabric layers along the normal, from PROBE outside the skin down to NEAR_IN inside it (f > 0: outside)
-            f_min = f_max = None; travelled = 0.0
+            layers = []; travelled = 0.0
             while travelled < PROBE + NEAR_IN:
                 hit = cloth_bvh.ray_cast(p + n * (PROBE - travelled), -n, PROBE + NEAR_IN - travelled)
                 if hit[0] is None:
                     break
                 travelled += hit[3] + 0.0002
-                f = PROBE - travelled
-                f_min = f if f_min is None else min(f_min, f)
-                f_max = f if f_max is None else max(f_max, f)
-            if f_min is None or f_max >= CLEAR:   # nothing there, or the outermost layer already covers this skin
-                continue
-            if f_min < 0:   # the skin pokes through: only if that fabric is in the near half of the part's thickness
+                layers.append(PROBE - travelled)
+            own = int(vslot[vi])
+            for k, bvh in part_bvh.items():   # another mannequin part just outside (boots over legs, shoes over feet)
+                if k != own:
+                    hit = bvh.ray_cast(p + n * PROBE, -n, PROBE)
+                    if hit[0] is not None and PROBE - hit[3] > 0.0003:   # not the shared seam with a neighbouring part
+                        layers.append(PROBE - hit[3])
+            outside = [f for f in layers if f >= 0.0]
+            if outside:      # covered: keep the innermost outside layer at least CLEAR away
+                f_ref = min(outside)
+                if f_ref >= CLEAR:
+                    continue
+                pushed_clear += 1
+            elif layers:     # exposed skin with fabric inside it: it pokes through, unless that fabric is on the far
+                f_ref = min(layers)   # side (it must be in the near half of the part's thickness)
                 wall = body_bvh.ray_cast(p - n * 0.001, -n, 1.0)
-                if -f_min >= (0.5 * wall[3] if wall[0] is not None else 0.02):
+                if -f_ref >= (0.5 * wall[3] if wall[0] is not None else 0.02):
                     continue
                 pushed_in += 1
             else:
-                pushed_clear += 1
-            move = CLEAR - f_min
+                continue
+            move = CLEAR - f_ref
             co[vi] -= nrm[vi] * move; max_push = max(max_push, move)
         me.vertices.foreach_set("co", co.ravel()); me.update()
         body_bvh = BVHTree.FromPolygons([tuple(v) for v in co.tolist()], body_polys, all_triangles=False)
@@ -487,7 +516,7 @@ def decimate_group(obj, vert_indices, group_faces, ratio, name):
 
 
 print("=== DECIMATE (budget %d) ===" % BUDGET)
-kept = 0; body_faces = 0; junk = {}
+kept = 0; body_faces = 0; solid_faces = 0; junk = {}
 if avatar is not None:
     for n, s in st.items():
         c = classes.get(n)
@@ -495,6 +524,8 @@ if avatar is not None:
             kept += s['faces']
         elif c == 'junk':
             junk[n] = s
+        elif c == 'solidhair':
+            solid_faces += s['faces']
         else:
             body_faces += s['faces']
 body_target = min(body_faces, int(body_faces * body_ratio), BODY_MAX) if body_faces else 0
@@ -505,9 +536,13 @@ if sum(trim_targets.values()) > TRIMS_MAX:
     trim_targets = {n: max(int(t * k), 50) for n, t in trim_targets.items()}
 cloth_faces = {o.name: len(o.data.polygons) for o in cloth_meshes}
 cloth_total = sum(cloth_faces.values())
-cloth_budget = max(BUDGET - kept - body_target - sum(trim_targets.values()) - JUNK_TARGET * len(junk), int(cloth_total * 0.05))
+fixed = kept + body_target + sum(trim_targets.values()) + JUNK_TARGET * len(junk)
+# solid hair takes what the budget leaves after the cloth's usual share, but never less than 15% of itself
+# (strand meshes can be 500k+ faces: garment 4); the cloth then adapts
+solid_target = int(min(solid_faces, max(BUDGET - fixed - int(cloth_total * cloth_ratio), solid_faces * 0.15))) if solid_faces else 0
+cloth_budget = max(BUDGET - fixed - solid_target, int(cloth_total * 0.05))
 cloth_r = min(cloth_ratio, cloth_budget / max(cloth_total, 1))
-print(f"PLAN kept(hair+tiny)={kept} body {body_faces}->{body_target} trims {sum(trim_faces.values())}->{sum(trim_targets.values())} junk {sum(s['faces'] for s in junk.values())}->{JUNK_TARGET * len(junk)} cloth {cloth_total}->{int(cloth_total * cloth_r)} (ratio {cloth_r:.3f})")
+print(f"PLAN kept(hair+tiny)={kept} body {body_faces}->{body_target} solid hair {solid_faces}->{solid_target} trims {sum(trim_faces.values())}->{sum(trim_targets.values())} junk {sum(s['faces'] for s in junk.values())}->{JUNK_TARGET * len(junk)} cloth {cloth_total}->{int(cloth_total * cloth_r)} (ratio {cloth_r:.3f})")
 
 for obj in cloth_meshes:
     b, a = decimate_whole(obj, cloth_r)
@@ -536,6 +571,14 @@ if avatar is not None:
         b, a = decimate_group(avatar, verts, faces_now, body_target / max(faces_now, 1), "body")
         avatar.data.validate(verbose=False)
         print(f"Avatar body: {b} -> {a} tris")
+    if solid_faces:
+        cur = slot_stats(avatar)
+        solid_now = [s for n, s in cur.items() if classes.get(n) == 'solidhair']
+        faces_now = sum(s['faces'] for s in solid_now)
+        verts = np.unique(np.concatenate([s['verts'] for s in solid_now]))
+        b, a = decimate_group(avatar, verts, faces_now, solid_target / max(faces_now, 1), "solidhair")
+        avatar.data.validate(verbose=False)
+        print(f"Avatar solid hair: {b} -> {a} tris")
 total_now = sum(len(o.data.polygons) for o in meshes)
 print(f"TOTAL after decimation: {total_now} tris")
 
@@ -560,7 +603,7 @@ for img in list(bpy.data.images):
         print(f"{img.name}: no pixel data, skipped")
         continue
     has_alpha = image_has_alpha(img)
-    t = 2048 if max(w, h) >= 3000 else (1024 if max(w, h) > 1024 else None)
+    t = 2048 if (max(w, h) >= 3000 or img.name in KEEP_2048) else (1024 if max(w, h) > 1024 else None)
     if t:
         img.scale(int(w * t / max(w, h)), int(h * t / max(w, h)))
     nw, nh = img.size
